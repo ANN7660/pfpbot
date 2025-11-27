@@ -7,6 +7,7 @@ import re
 from bs4 import BeautifulSoup
 from threading import Thread
 from flask import Flask
+import asyncio # <-- NOUVEAU: Ajout pour le délai asynchrone
 
 # Configuration
 intents = discord.Intents.default()
@@ -25,7 +26,8 @@ def home():
 
 @app.route('/health')
 def health():
-    return {"status": "alive", "bot": str(bot.user)}
+    # Afficher le statut du bot
+    return {"status": "alive", "bot": str(bot.user) if bot.user else "Initialisation..."}
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -71,7 +73,8 @@ CATEGORIES = {
 
 # Headers pour éviter la détection
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    # MODIFIÉ: Nouvel User-Agent pour améliorer la résistance au blocage
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
     'Accept-Encoding': 'gzip, deflate, br',
@@ -87,9 +90,14 @@ async def search_pinterest(query: str, max_results: int = 20):
         search_query = query.replace(' ', '%20')
         url = f"https://www.pinterest.com/search/pins/?q={search_query}"
         
+        # AJOUTÉ: Délai de 2 secondes pour éviter le blocage d'IP
+        await asyncio.sleep(2) 
+        
         async with aiohttp.ClientSession(headers=HEADERS) as session:
-            async with session.get(url, timeout=10) as response:
+            # MODIFIÉ: Augmentation du timeout à 20 secondes
+            async with session.get(url, timeout=20) as response:
                 if response.status != 200:
+                    print(f"Erreur HTTP {response.status} pour la requête: {query}")
                     return None
                 
                 html = await response.text()
@@ -127,8 +135,11 @@ async def search_pinterest(query: str, max_results: int = 20):
                 
                 return quality_urls[:max_results] if quality_urls else None
                 
+    except asyncio.TimeoutError:
+        print(f"❌ Erreur Pinterest scraping: Timeout (Délai d'attente dépassé) pour {query}")
+        return None
     except Exception as e:
-        print(f"Erreur Pinterest scraping: {e}")
+        print(f"❌ Erreur Pinterest scraping générale pour {query}: {e}")
         return None
 
 # Modal pour recherche personnalisée
@@ -362,7 +373,7 @@ async def on_ready():
     print(f'🎨 Catégories: {len(CATEGORIES)}')
     total_styles = sum(len(styles) for styles in CATEGORIES.values())
     print(f'✨ Total de styles: {total_styles}')
-    print('📌 Mode: Pinterest scraping')
+    print('📌 Mode: Pinterest scraping (Optimisé)')
     print('🌐 Serveur web actif sur port 8080')
     print('━' * 50)
 
@@ -427,11 +438,15 @@ async def list_categories(ctx):
     categories_list = list(CATEGORIES.items())
     for i in range(0, len(categories_list), 10):
         chunk = categories_list[i:i+10]
+        field_value = ""
         for category, subcats in chunk:
             styles = ", ".join(subcats[:3])
             if len(subcats) > 3:
                 styles += f"... (+{len(subcats)-3})"
-            embed.add_field(name=category, value=styles, inline=False)
+            field_value += f"**{category}**: {styles}\n"
+        
+        if field_value:
+            embed.add_field(name=f"Page {i//10 + 1}", value=field_value, inline=False)
     
     total_styles = sum(len(styles) for styles in CATEGORIES.values())
     embed.set_footer(text=f"Total: {len(CATEGORIES)} catégories • {total_styles} styles")
