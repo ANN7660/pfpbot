@@ -1,7 +1,6 @@
 import discord
 from discord.ext import commands
 import os
-import aiohttp
 import random
 import re
 from bs4 import BeautifulSoup
@@ -11,9 +10,12 @@ import asyncio
 import sys
 import logging
 import json 
+# 🛑 NOUVELLE LIBRAIRIE
+import cloudscraper 
 
 # ========================================
 # CONFIGURATION DU LOGGING
+# (INCHANGÉ)
 # ========================================
 logging.basicConfig(
     level=logging.INFO,
@@ -48,7 +50,6 @@ def home():
 def health():
     return {"status": "alive", "bot": str(bot.user) if bot.user else "Initialisation..."}
 
-# Fonction run_flask simplifiée pour éviter le crash de Gunicorn/Signal
 def run_flask():
     """Lance le serveur Flask simple dans un thread séparé."""
     logger.info("🌐 Démarrage du serveur Flask simple sur 0.0.0.0:8080...")
@@ -96,9 +97,10 @@ CATEGORIES = {
     "🔥 Sigma": ["sigma male", "sigma aesthetic", "lone wolf", "alpha aesthetic", "motivation aesthetic"]
 }
 
-# ⚠️ CORRECTION : Headers avec User-Agent Firefox + suppression de Brotli
+# ⚠️ HEADERS sont conservés pour être passés à cloudscraper, même si cloudscraper 
+# peut gérer les headers lui-même pour l'anti-bot
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0', # <-- NOUVEL User-Agent
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
     'Accept-Encoding': 'gzip, deflate', 
@@ -107,137 +109,147 @@ HEADERS = {
     'Upgrade-Insecure-Requests': '1'
 }
 
+# Initialisation du scraper cloudscraper
+scraper = cloudscraper.create_scraper()
+
+def fetch_pinterest_sync(url: str, query: str):
+    """Fonction synchrone utilisant cloudscraper (exécutée dans un thread séparé)."""
+    
+    # 1. Requête HTTP utilisant cloudscraper
+    try:
+        logger.info(f"🌐 Envoi de la requête HTTP via cloudscraper vers Pinterest (URL: {url})...")
+        response = scraper.get(url, headers=HEADERS, timeout=20)
+        logger.info(f"📥 Réponse reçue - Status Code: {response.status_code}")
+        
+        if response.status_code != 200:
+            logger.error(f"❌ Erreur HTTP {response.status_code} pour la requête: {query}")
+            return None
+        
+        html = response.text
+        logger.info(f"📄 HTML reçu - Taille: {len(html)} caractères")
+        return html
+        
+    except Exception as e:
+        logger.error(f"❌ ERREUR CLOUDSCRAPER pour '{query}': {e.__class__.__name__}: {e}")
+        return None
+
 async def search_pinterest(query: str, max_results: int = 20):
     """
-    Scraper Pinterest avec double-méthode d'analyse pour la robustesse (Structured + Regex Fallback).
+    Fonction asynchrone pour l'interface Discord, utilise asyncio.to_thread 
+    pour exécuter cloudscraper sans bloquer le loop principal.
     """
-    logger.info(f"🔍 DÉBUT de la recherche pour: '{query}'")
+    logger.info(f"🔍 DÉBUT de la recherche pour: '{query}' (via cloudscraper)")
     
+    search_query = query.replace(' ', '%20')
+    url = f"https://www.pinterest.com/search/pins/?q={search_query}"
+    logger.info(f"📌 URL générée: {url}")
+    logger.info(f"⏳ Délai de 2 secondes avant la requête...")
+    await asyncio.sleep(2)
+    
+    # Exécuter la fonction synchrone dans un thread séparé
+    html = await asyncio.to_thread(fetch_pinterest_sync, url, query)
+
+    if html is None:
+        logger.warning(f"⚠️ ÉCHEC: Aucune page HTML valide reçue pour '{query}'")
+        return None
+
+    # Suite du parsing (inchangée car il dépend de l'HTML)
     try:
-        search_query = query.replace(' ', '%20')
-        url = f"https://www.pinterest.com/search/pins/?q={search_query}"
+        soup = BeautifulSoup(html, 'html.parser')
+        image_urls = []
         
-        logger.info(f"📌 URL générée: {url}")
-        logger.info(f"⏳ Délai de 2 secondes avant la requête...")
-        await asyncio.sleep(2)
-        logger.info(f"🌐 Envoi de la requête HTTP vers Pinterest...")
+        # Méthode 1: Chercher dans les balises img 
+        logger.info(f"🔎 Méthode 1: Recherche dans les balises <img>...")
+        img_tags = soup.find_all('img')
         
-        async with aiohttp.ClientSession(headers=HEADERS) as session:
-            async with session.get(url, timeout=20) as response:
-                logger.info(f"📥 Réponse reçue - Status Code: {response.status}")
-                
-                if response.status != 200:
-                    logger.error(f"❌ Erreur HTTP {response.status} pour la requête: {query}")
-                    return None
-                
-                html = await response.text()
-                logger.info(f"📄 HTML reçu - Taille: {len(html)} caractères")
-                
-                soup = BeautifulSoup(html, 'html.parser')
-                image_urls = []
-                
-                # Méthode 1: Chercher dans les balises img 
-                logger.info(f"🔎 Méthode 1: Recherche dans les balises <img>...")
-                img_tags = soup.find_all('img')
-                
-                for img in img_tags:
-                    src = img.get('src')
-                    if src and 'pinimg.com' in src:
-                        high_res = src.replace('236x', '736x').replace('474x', '736x')
-                        if high_res not in image_urls:
-                            image_urls.append(high_res)
-                
-                logger.info(f"    ✅ {len(image_urls)} URLs trouvées via <img>")
+        for img in img_tags:
+            src = img.get('src')
+            if src and 'pinimg.com' in src:
+                high_res = src.replace('236x', '736x').replace('474x', '736x')
+                if high_res not in image_urls:
+                    image_urls.append(high_res)
+        
+        logger.info(f"    ✅ {len(image_urls)} URLs trouvées via <img>")
 
 
-                # Méthode 2: Parsing structuré 
-                logger.info(f"🔎 Méthode 2: Recherche dans le JSON embarqué (Parsing structuré + Fallback)...")
-                scripts = soup.find_all('script', {'id': '__PWS_DATA__'})
-                logger.info(f"    Trouvé {len(scripts)} scripts avec id='__PWS_DATA__'")
+        # Méthode 2: Parsing structuré (Le plus important)
+        logger.info(f"🔎 Méthode 2: Recherche dans le JSON embarqué (Parsing structuré + Fallback)...")
+        scripts = soup.find_all('script', {'id': '__PWS_DATA__'})
+        logger.info(f"    Trouvé {len(scripts)} scripts avec id='__PWS_DATA__'")
+        
+        if scripts:
+            content = scripts[0].string
+            
+            # Tentative 1: Parsing structuré du JSON 
+            try:
+                data = json.loads(content.strip())
+                results = []
+                results_data = {}
                 
-                if scripts:
-                    content = scripts[0].string
-                    
-                    # Tentative 1: Parsing structuré du JSON 
-                    try:
-                        data = json.loads(content.strip())
-                        results = []
-                        results_data = {}
-                        
-                        # Accès Conditionnel 1 : Chemin ResourceResponses 
-                        if 'resourceResponses' in data and len(data['resourceResponses']) > 0:
-                            results_data = data['resourceResponses'][0]['response']['data']
-                        
-                        # Accès Conditionnel 2 : Chemin ReduxState
-                        elif 'initialReduxState' in data and 'pins' in data['initialReduxState']:
-                            results_data = data['initialReduxState']['pins']
-                        
-                        
-                        # Tenter d'extraire la liste de pins de l'objet de données trouvé
-                        if results_data and 'data' in results_data:
-                            results = results_data['data']
-                        elif results_data and 'results' in results_data:
-                            results = results_data['results']
-                        
-                        
-                        count = 0
-                        for pin in results:
-                            if isinstance(pin, dict) and 'images' in pin:
-                                if 'orig' in pin['images']:
-                                    high_res_url = pin['images']['orig']['url']
-                                elif '736x' in pin['images']:
-                                    high_res_url = pin['images']['736x']['url']
-                                else:
-                                    continue
-                                    
-                                if high_res_url not in image_urls:
-                                    image_urls.append(high_res_url)
-                                    count += 1
+                if 'resourceResponses' in data and len(data['resourceResponses']) > 0:
+                    results_data = data['resourceResponses'][0]['response']['data']
+                elif 'initialReduxState' in data and 'pins' in data['initialReduxState']:
+                    results_data = data['initialReduxState']['pins']
+                
+                if results_data and 'data' in results_data:
+                    results = results_data['data']
+                elif results_data and 'results' in results_data:
+                    results = results_data['results']
+                
+                count = 0
+                for pin in results:
+                    if isinstance(pin, dict) and 'images' in pin:
+                        if 'orig' in pin['images']:
+                            high_res_url = pin['images']['orig']['url']
+                        elif '736x' in pin['images']:
+                            high_res_url = pin['images']['736x']['url']
+                        else:
+                            continue
+                            
+                        if high_res_url not in image_urls:
+                            image_urls.append(high_res_url)
+                            count += 1
 
-                        logger.info(f"    ✅ {count} URLs trouvées via le JSON structuré.")
+                logger.info(f"    ✅ {count} URLs trouvées via le JSON structuré.")
 
-                    except json.JSONDecodeError:
-                        logger.error("❌ ERREUR JSON: Impossible de décoder le contenu de __PWS_DATA__.")
-                    except Exception as e:
-                        logger.warning(f"⚠️ ERREUR PARSING JSON: {e.__class__.__name__}: {e}. Tentative de fallback Regex...")
+            except json.JSONDecodeError:
+                logger.error("❌ ERREUR JSON: Impossible de décoder le contenu de __PWS_DATA__.")
+            except Exception as e:
+                logger.warning(f"⚠️ ERREUR PARSING JSON: {e.__class__.__name__}: {e}. Tentative de fallback Regex...")
 
-                    # Tentative 2 (Fallback): Regex de sécurité 
-                    if len(image_urls) < 5: 
-                        logger.info("🔎 Fallback Regex: Recherche des URLs brutes...")
-                        urls_from_regex = re.findall(r'https://i\.pinimg\.com/[^"\']+\.jpg', content)
-                        
-                        count_regex = 0
-                        for url_brute in urls_from_regex:
-                            high_res = url_brute.replace('236x', '736x').replace('474x', '736x')
-                            if high_res not in image_urls:
-                                image_urls.append(high_res)
-                                count_regex += 1
-                        
-                        logger.info(f"    ✅ {count_regex} URLs trouvées via Regex.")
+            # Tentative 2 (Fallback): Regex de sécurité 
+            if len(image_urls) < 5: 
+                logger.info("🔎 Fallback Regex: Recherche des URLs brutes...")
+                urls_from_regex = re.findall(r'https://i\.pinimg\.com/[^"\']+\.jpg', content)
                 
+                count_regex = 0
+                for url_brute in urls_from_regex:
+                    high_res = url_brute.replace('236x', '736x').replace('474x', '736x')
+                    if high_res not in image_urls:
+                        image_urls.append(high_res)
+                        count_regex += 1
                 
-                logger.info(f"    ✅ Total: {len(image_urls)} URLs uniques")
-                
-                # Filtrer pour avoir que des images de bonne qualité
-                quality_urls = [url for url in image_urls if '736x' in url or 'originals' in url]
-                
-                if not quality_urls and image_urls:
-                    quality_urls = image_urls[:max_results]
-                
-                if quality_urls:
-                    logger.info(f"✅ SUCCÈS: {len(quality_urls)} images de qualité trouvées pour '{query}'")
-                    return quality_urls[:max_results]
-                else:
-                    logger.warning(f"⚠️ ÉCHEC: Aucune image trouvée après analyse pour '{query}'")
-                    return None
-                    
-    except asyncio.TimeoutError:
-        logger.error(f"❌ TIMEOUT: Délai d'attente dépassé (>20s) pour '{query}'")
-        return None
+                logger.info(f"    ✅ {count_regex} URLs trouvées via Regex.")
+        
+        
+        logger.info(f"    ✅ Total: {len(image_urls)} URLs uniques")
+        
+        # Filtrer pour avoir que des images de bonne qualité
+        quality_urls = [url for url in image_urls if '736x' in url or 'originals' in url]
+        
+        if not quality_urls and image_urls:
+            quality_urls = image_urls[:max_results]
+        
+        if quality_urls:
+            logger.info(f"✅ SUCCÈS: {len(quality_urls)} images de qualité trouvées pour '{query}'")
+            return quality_urls[:max_results]
+        else:
+            logger.warning(f"⚠️ ÉCHEC: Aucune image trouvée après analyse pour '{query}'")
+            return None
+            
     except Exception as e:
-        logger.error(f"❌ ERREUR GÉNÉRALE pour '{query}': {e.__class__.__name__}: {e}")
+        logger.error(f"❌ ERREUR LORS DU PARSING HTML/JSON pour '{query}': {e.__class__.__name__}: {e}")
         return None
-
 
 # ========================================
 # CLASSES ET VUES INTERACTIVES (INCHANGÉES)
@@ -465,7 +477,7 @@ class RefreshView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=view)
 
 # ========================================
-# COMMANDES DU BOT
+# COMMANDES DU BOT (INCHANGÉES)
 # ========================================
 
 @bot.event
