@@ -13,7 +13,7 @@ import logging
 import json 
 
 # ========================================
-# CONFIGURATION DU LOGGING (CRITIQUE)
+# CONFIGURATION DU LOGGING
 # ========================================
 logging.basicConfig(
     level=logging.INFO,
@@ -24,13 +24,12 @@ logging.basicConfig(
     ]
 )
 
-# Forcer l'affichage immédiat (pour Render)
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
 logger = logging.getLogger(__name__)
 
-# Configuration
+# Configuration du bot
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -38,7 +37,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 # Récupération du token
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
-# 🌐 SERVEUR WEB FLASK pour garder le bot actif
+# 🌐 SERVEUR WEB FLASK
 app = Flask('')
 
 @app.route('/')
@@ -49,38 +48,17 @@ def home():
 def health():
     return {"status": "alive", "bot": str(bot.user) if bot.user else "Initialisation..."}
 
+# 🛠️ CORRECTION: Fonction run_flask simplifiée pour éviter le crash de Gunicorn/Signal
 def run_flask():
-    # Utilisation de gunicorn si disponible, sinon un serveur simple
+    """Lance le serveur Flask simple dans un thread séparé."""
+    # use_reloader=False est important pour éviter des démarrages multiples dans un contexte de thread
+    logger.info("🌐 Démarrage du serveur Flask simple sur 0.0.0.0:8080...")
     try:
-        import gunicorn.app.base
-        
-        class StandaloneApplication(gunicorn.app.base.BaseApplication):
-            def __init__(self, app, options=None):
-                self.options = options or {}
-                self.application = app
-                super().__init__()
+        app.run(host='0.0.0.0', port=8080, use_reloader=False)
+    except Exception as e:
+        logger.error(f"❌ ERREUR LORS DU LANCEMENT DE FLASK: {e}")
 
-            def load_config(self):
-                config = {key: value for key, value in self.options.items()
-                          if key in self.cfg.settings and value is not None}
-                for key, value in config.items():
-                    self.cfg.set(key.lower(), value)
-
-            def load(self):
-                return self.application
-
-        options = {
-            'bind': '0.0.0.0:8080',
-            'workers': 1,
-            'log-level': 'warning',
-        }
-        StandaloneApplication(app, options).run()
-    except ImportError:
-        # Fallback si gunicorn n'est pas installé (moins robuste)
-        app.run(host='0.0.0.0', port=8080)
-
-
-# 🎨 Dictionnaire des CATÉGORIES
+# 🎨 Dictionnaire des CATÉGORIES (omis pour la concision mais supposé être présent)
 CATEGORIES = {
     "🎨 Aesthetic": ["aesthetic pink", "aesthetic blue", "aesthetic purple", "aesthetic dark", "aesthetic light", "aesthetic vintage"],
     "😎 Anime": ["anime boy", "anime girl", "anime aesthetic", "anime dark", "manga", "anime pfp", "anime cool", "anime kawaii"],
@@ -173,7 +151,7 @@ async def search_pinterest(query: str, max_results: int = 20):
                 logger.info(f"    ✅ {len(image_urls)} URLs trouvées via <img>")
 
 
-                # 🛑 CORRECTION : Méthode 2: Parsing structuré (NOUVEAU CHEMIN + FALLBACK)
+                # 🛑 Méthode 2: Parsing structuré (CORRIGÉ pour gérer les changements de clé)
                 logger.info(f"🔎 Méthode 2: Recherche dans le JSON embarqué (Parsing structuré + Fallback)...")
                 scripts = soup.find_all('script', {'id': '__PWS_DATA__'})
                 logger.info(f"    Trouvé {len(scripts)} scripts avec id='__PWS_DATA__'")
@@ -267,7 +245,6 @@ async def search_pinterest(query: str, max_results: int = 20):
 # CLASSES ET VUES INTERACTIVES (INCHANGÉES)
 # ========================================
 
-# Modal pour recherche personnalisée
 class CustomSearchModal(discord.ui.Modal):
     def __init__(self):
         super().__init__(title="🔍 Recherche Personnalisée")
@@ -617,15 +594,21 @@ async def help_cmd(ctx):
     
     await ctx.send(embed=embed)
 
-# 🚀 LANCEMENT
+# 🚀 LANCEMENT DU BOT ET DU SERVEUR WEB (CORRIGÉ)
 if __name__ == '__main__':
     if not DISCORD_TOKEN:
         logger.error("❌ ERREUR CRITIQUE: DISCORD_TOKEN manquant dans les variables d'environnement !")
     else:
         logger.info("🚀 Démarrage du bot Pinterest avec logging amélioré...")
         
-        # Lancer Flask dans un thread séparé
+        # 1. Lancer le serveur web simple (non Gunicorn) dans un thread séparé.
+        # Ceci satisfait l'exigence de Render d'ouvrir un port web.
         Thread(target=run_flask, daemon=True).start()
         
-        # Lancer le bot Discord
-        bot.run(DISCORD_TOKEN)
+        # 2. Lancer le bot Discord dans le thread principal.
+        # Ceci évite le crash 'ValueError: signal' car le bot est désormais le processus principal.
+        try:
+            bot.run(DISCORD_TOKEN)
+        except Exception as e:
+            logger.critical(f"❌ ERREUR LORS DU LANCEMENT DE DISCORD: {e}")
+            sys.exit(1)
