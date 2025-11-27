@@ -10,10 +10,10 @@ from flask import Flask
 import asyncio
 import sys
 import logging
-import json # NOUVELLE IMPORTATION
+import json 
 
 # ========================================
-# CONFIGURATION DU LOGGING
+# CONFIGURATION DU LOGGING (CRITIQUE)
 # ========================================
 logging.basicConfig(
     level=logging.INFO,
@@ -80,7 +80,7 @@ def run_flask():
         app.run(host='0.0.0.0', port=8080)
 
 
-# BEAUCOUP PLUS DE CATÉGORIES (35 catégories)
+# 🎨 Dictionnaire des CATÉGORIES
 CATEGORIES = {
     "🎨 Aesthetic": ["aesthetic pink", "aesthetic blue", "aesthetic purple", "aesthetic dark", "aesthetic light", "aesthetic vintage"],
     "😎 Anime": ["anime boy", "anime girl", "anime aesthetic", "anime dark", "manga", "anime pfp", "anime cool", "anime kawaii"],
@@ -119,12 +119,12 @@ CATEGORIES = {
     "🔥 Sigma": ["sigma male", "sigma aesthetic", "lone wolf", "alpha aesthetic", "motivation aesthetic"]
 }
 
-# Headers pour éviter la détection
+# Headers pour éviter la détection (Inclut Brotli)
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
+    'Accept-Encoding': 'gzip, deflate, br', # 'br' est clé pour Brotli
     'DNT': '1',
     'Connection': 'keep-alive',
     'Upgrade-Insecure-Requests': '1'
@@ -132,22 +132,17 @@ HEADERS = {
 
 async def search_pinterest(query: str, max_results: int = 20):
     """
-    Scraper Pinterest pour récupérer des images.
-    CORRECTION: Mise à jour du parsing JSON pour s'adapter aux changements de Pinterest.
+    Scraper Pinterest avec double-méthode d'analyse pour la robustesse (Structured + Regex Fallback).
     """
     logger.info(f"🔍 DÉBUT de la recherche pour: '{query}'")
     
     try:
-        # Formater la query pour l'URL Pinterest
         search_query = query.replace(' ', '%20')
         url = f"https://www.pinterest.com/search/pins/?q={search_query}"
         
         logger.info(f"📌 URL générée: {url}")
         logger.info(f"⏳ Délai de 2 secondes avant la requête...")
-        
-        # Délai de 2 secondes pour éviter le blocage d'IP
         await asyncio.sleep(2)
-        
         logger.info(f"🌐 Envoi de la requête HTTP vers Pinterest...")
         
         async with aiohttp.ClientSession(headers=HEADERS) as session:
@@ -164,62 +159,85 @@ async def search_pinterest(query: str, max_results: int = 20):
                 soup = BeautifulSoup(html, 'html.parser')
                 image_urls = []
                 
-                # Méthode 1: Chercher dans les balises img (Gardée mais inefficace sur Pinterest moderne)
+                # Méthode 1: Chercher dans les balises img (Gardée mais inefficace)
                 logger.info(f"🔎 Méthode 1: Recherche dans les balises <img>...")
                 img_tags = soup.find_all('img')
-                # logger.info(f"    Trouvé {len(img_tags)} balises <img>")
                 
                 for img in img_tags:
                     src = img.get('src')
-                    # Tentative de convertir en haute résolution
                     if src and 'pinimg.com' in src:
                         high_res = src.replace('236x', '736x').replace('474x', '736x')
                         if high_res not in image_urls:
                             image_urls.append(high_res)
                 
                 logger.info(f"    ✅ {len(image_urls)} URLs trouvées via <img>")
-                
-                # CORRECTION: Méthode 2: Parsing du JSON embarqué (Fiable)
-                logger.info(f"🔎 Méthode 2: Recherche dans le JSON embarqué (Parsing JSON)...")
+
+
+                # 🛑 CORRECTION : Méthode 2: Parsing structuré (NOUVEAU CHEMIN + FALLBACK)
+                logger.info(f"🔎 Méthode 2: Recherche dans le JSON embarqué (Parsing structuré + Fallback)...")
                 scripts = soup.find_all('script', {'id': '__PWS_DATA__'})
                 logger.info(f"    Trouvé {len(scripts)} scripts avec id='__PWS_DATA__'")
                 
                 if scripts:
+                    content = scripts[0].string
+                    
+                    # Tentative 1: Parsing structuré du JSON (méthode préférée)
                     try:
-                        # 1. Décoder le JSON
-                        content = scripts[0].string
-                        # Supprimer les sauts de ligne pour éviter les erreurs de décodage
                         data = json.loads(content.strip())
+                        results = []
+                        results_data = {}
                         
-                        # 2. CHEMIN D'ACCÈS ACTUEL AUX ÉPINGLES
-                        # C'est la partie qui a été modifiée par Pinterest
+                        # Accès Conditionnel 1 : Chemin ResourceResponses (Ancien chemin stable, qui a craché)
+                        if 'resourceResponses' in data and len(data['resourceResponses']) > 0:
+                            results_data = data['resourceResponses'][0]['response']['data']
                         
-                        # Ce chemin est souvent fiable pour la recherche:
-                        results = data['resourceResponses'][0]['response']['data']['results']
+                        # Accès Conditionnel 2 : Chemin ReduxState (Souvent utilisé comme alternative)
+                        elif 'initialReduxState' in data and 'pins' in data['initialReduxState']:
+                            results_data = data['initialReduxState']['pins']
+                        
+                        
+                        # Tenter d'extraire la liste de pins de l'objet de données trouvé
+                        if results_data and 'data' in results_data:
+                            results = results_data['data']
+                        elif results_data and 'results' in results_data:
+                            results = results_data['results']
+                        
                         
                         count = 0
                         for pin in results:
-                            # Tenter d'extraire l'URL originale ou 736x
-                            if 'images' in pin:
+                            if isinstance(pin, dict) and 'images' in pin:
+                                # Tenter d'extraire l'URL originale ou 736x
                                 if 'orig' in pin['images']:
                                     high_res_url = pin['images']['orig']['url']
                                 elif '736x' in pin['images']:
                                     high_res_url = pin['images']['736x']['url']
                                 else:
-                                    continue # Passer si l'URL n'est pas trouvée
+                                    continue
                                     
                                 if high_res_url not in image_urls:
                                     image_urls.append(high_res_url)
                                     count += 1
 
-                        logger.info(f"    ✅ {count} URLs trouvées via le JSON (Nouveau chemin)")
-                        
+                        logger.info(f"    ✅ {count} URLs trouvées via le JSON structuré.")
+
                     except json.JSONDecodeError:
                         logger.error("❌ ERREUR JSON: Impossible de décoder le contenu de __PWS_DATA__.")
-                    except KeyError as e:
-                        logger.error(f"❌ ERREUR KEY: La structure JSON a changé (Clé manquante: {e}).")
-                    except IndexError:
-                        logger.error("❌ ERREUR INDEX: Contenu de __PWS_DATA__ vide ou mal formé.")
+                    except Exception as e:
+                        logger.warning(f"⚠️ ERREUR PARSING JSON: {e.__class__.__name__}: {e}. Tentative de fallback Regex...")
+
+                    # Tentative 2 (Fallback): Regex de sécurité si l'analyse structurée a trouvé trop peu d'images
+                    if len(image_urls) < 5: 
+                        logger.info("🔎 Fallback Regex: Recherche des URLs brutes...")
+                        urls_from_regex = re.findall(r'https://i\.pinimg\.com/[^"\']+\.jpg', content)
+                        
+                        count_regex = 0
+                        for url_brute in urls_from_regex:
+                            high_res = url_brute.replace('236x', '736x').replace('474x', '736x')
+                            if high_res not in image_urls:
+                                image_urls.append(high_res)
+                                count_regex += 1
+                        
+                        logger.info(f"    ✅ {count_regex} URLs trouvées via Regex.")
                 
                 
                 logger.info(f"    ✅ Total: {len(image_urls)} URLs uniques")
@@ -228,7 +246,6 @@ async def search_pinterest(query: str, max_results: int = 20):
                 quality_urls = [url for url in image_urls if '736x' in url or 'originals' in url]
                 
                 if not quality_urls and image_urls:
-                    # Si aucune URL de "qualité" n'est trouvée, utiliser les premières trouvées
                     quality_urls = image_urls[:max_results]
                 
                 if quality_urls:
@@ -236,7 +253,6 @@ async def search_pinterest(query: str, max_results: int = 20):
                     return quality_urls[:max_results]
                 else:
                     logger.warning(f"⚠️ ÉCHEC: Aucune image trouvée après analyse pour '{query}'")
-                    logger.warning(f"    Vérifiez si Pinterest a changé sa structure HTML/JSON")
                     return None
                     
     except asyncio.TimeoutError:
@@ -245,6 +261,11 @@ async def search_pinterest(query: str, max_results: int = 20):
     except Exception as e:
         logger.error(f"❌ ERREUR GÉNÉRALE pour '{query}': {e.__class__.__name__}: {e}")
         return None
+
+
+# ========================================
+# CLASSES ET VUES INTERACTIVES (INCHANGÉES)
+# ========================================
 
 # Modal pour recherche personnalisée
 class CustomSearchModal(discord.ui.Modal):
@@ -468,6 +489,10 @@ class RefreshView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=view)
 
+# ========================================
+# COMMANDES DU BOT
+# ========================================
+
 @bot.event
 async def on_ready():
     logger.info(f'✅ {bot.user} est connecté à Discord !')
@@ -475,7 +500,7 @@ async def on_ready():
     logger.info(f'🎨 Catégories disponibles: {len(CATEGORIES)}')
     total_styles = sum(len(styles) for styles in CATEGORIES.values())
     logger.info(f'✨ Total de styles: {total_styles}')
-    logger.info('📌 Mode: Pinterest scraping (Optimisé avec Logging)')
+    logger.info('📌 Mode: Pinterest scraping (Optimisé)')
     logger.info('🌐 Serveur web Flask actif sur port 8080')
     logger.info('━' * 50)
 
