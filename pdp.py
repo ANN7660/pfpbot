@@ -48,17 +48,16 @@ def home():
 def health():
     return {"status": "alive", "bot": str(bot.user) if bot.user else "Initialisation..."}
 
-# 🛠️ CORRECTION: Fonction run_flask simplifiée pour éviter le crash de Gunicorn/Signal
+# Fonction run_flask simplifiée pour éviter le crash de Gunicorn/Signal
 def run_flask():
     """Lance le serveur Flask simple dans un thread séparé."""
-    # use_reloader=False est important pour éviter des démarrages multiples dans un contexte de thread
     logger.info("🌐 Démarrage du serveur Flask simple sur 0.0.0.0:8080...")
     try:
         app.run(host='0.0.0.0', port=8080, use_reloader=False)
     except Exception as e:
         logger.error(f"❌ ERREUR LORS DU LANCEMENT DE FLASK: {e}")
 
-# 🎨 Dictionnaire des CATÉGORIES (omis pour la concision mais supposé être présent)
+# 🎨 Dictionnaire des CATÉGORIES (Liste complète)
 CATEGORIES = {
     "🎨 Aesthetic": ["aesthetic pink", "aesthetic blue", "aesthetic purple", "aesthetic dark", "aesthetic light", "aesthetic vintage"],
     "😎 Anime": ["anime boy", "anime girl", "anime aesthetic", "anime dark", "manga", "anime pfp", "anime cool", "anime kawaii"],
@@ -97,12 +96,12 @@ CATEGORIES = {
     "🔥 Sigma": ["sigma male", "sigma aesthetic", "lone wolf", "alpha aesthetic", "motivation aesthetic"]
 }
 
-# Headers pour éviter la détection (Inclut Brotli)
+# ⚠️ CORRECTION : Headers avec User-Agent Firefox + suppression de Brotli
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0', # <-- NOUVEL User-Agent
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br', # 'br' est clé pour Brotli
+    'Accept-Encoding': 'gzip, deflate', 
     'DNT': '1',
     'Connection': 'keep-alive',
     'Upgrade-Insecure-Requests': '1'
@@ -137,7 +136,7 @@ async def search_pinterest(query: str, max_results: int = 20):
                 soup = BeautifulSoup(html, 'html.parser')
                 image_urls = []
                 
-                # Méthode 1: Chercher dans les balises img (Gardée mais inefficace)
+                # Méthode 1: Chercher dans les balises img 
                 logger.info(f"🔎 Méthode 1: Recherche dans les balises <img>...")
                 img_tags = soup.find_all('img')
                 
@@ -151,7 +150,7 @@ async def search_pinterest(query: str, max_results: int = 20):
                 logger.info(f"    ✅ {len(image_urls)} URLs trouvées via <img>")
 
 
-                # 🛑 Méthode 2: Parsing structuré (CORRIGÉ pour gérer les changements de clé)
+                # Méthode 2: Parsing structuré 
                 logger.info(f"🔎 Méthode 2: Recherche dans le JSON embarqué (Parsing structuré + Fallback)...")
                 scripts = soup.find_all('script', {'id': '__PWS_DATA__'})
                 logger.info(f"    Trouvé {len(scripts)} scripts avec id='__PWS_DATA__'")
@@ -159,17 +158,17 @@ async def search_pinterest(query: str, max_results: int = 20):
                 if scripts:
                     content = scripts[0].string
                     
-                    # Tentative 1: Parsing structuré du JSON (méthode préférée)
+                    # Tentative 1: Parsing structuré du JSON 
                     try:
                         data = json.loads(content.strip())
                         results = []
                         results_data = {}
                         
-                        # Accès Conditionnel 1 : Chemin ResourceResponses (Ancien chemin stable, qui a craché)
+                        # Accès Conditionnel 1 : Chemin ResourceResponses 
                         if 'resourceResponses' in data and len(data['resourceResponses']) > 0:
                             results_data = data['resourceResponses'][0]['response']['data']
                         
-                        # Accès Conditionnel 2 : Chemin ReduxState (Souvent utilisé comme alternative)
+                        # Accès Conditionnel 2 : Chemin ReduxState
                         elif 'initialReduxState' in data and 'pins' in data['initialReduxState']:
                             results_data = data['initialReduxState']['pins']
                         
@@ -184,7 +183,6 @@ async def search_pinterest(query: str, max_results: int = 20):
                         count = 0
                         for pin in results:
                             if isinstance(pin, dict) and 'images' in pin:
-                                # Tenter d'extraire l'URL originale ou 736x
                                 if 'orig' in pin['images']:
                                     high_res_url = pin['images']['orig']['url']
                                 elif '736x' in pin['images']:
@@ -203,7 +201,7 @@ async def search_pinterest(query: str, max_results: int = 20):
                     except Exception as e:
                         logger.warning(f"⚠️ ERREUR PARSING JSON: {e.__class__.__name__}: {e}. Tentative de fallback Regex...")
 
-                    # Tentative 2 (Fallback): Regex de sécurité si l'analyse structurée a trouvé trop peu d'images
+                    # Tentative 2 (Fallback): Regex de sécurité 
                     if len(image_urls) < 5: 
                         logger.info("🔎 Fallback Regex: Recherche des URLs brutes...")
                         urls_from_regex = re.findall(r'https://i\.pinimg\.com/[^"\']+\.jpg', content)
@@ -594,7 +592,7 @@ async def help_cmd(ctx):
     
     await ctx.send(embed=embed)
 
-# 🚀 LANCEMENT DU BOT ET DU SERVEUR WEB (CORRIGÉ)
+# 🚀 LANCEMENT DU BOT ET DU SERVEUR WEB 
 if __name__ == '__main__':
     if not DISCORD_TOKEN:
         logger.error("❌ ERREUR CRITIQUE: DISCORD_TOKEN manquant dans les variables d'environnement !")
@@ -602,11 +600,9 @@ if __name__ == '__main__':
         logger.info("🚀 Démarrage du bot Pinterest avec logging amélioré...")
         
         # 1. Lancer le serveur web simple (non Gunicorn) dans un thread séparé.
-        # Ceci satisfait l'exigence de Render d'ouvrir un port web.
         Thread(target=run_flask, daemon=True).start()
         
         # 2. Lancer le bot Discord dans le thread principal.
-        # Ceci évite le crash 'ValueError: signal' car le bot est désormais le processus principal.
         try:
             bot.run(DISCORD_TOKEN)
         except Exception as e:
