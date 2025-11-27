@@ -7,7 +7,27 @@ import re
 from bs4 import BeautifulSoup
 from threading import Thread
 from flask import Flask
-import asyncio # <-- Ajouté pour le délai asynchrone
+import asyncio
+import sys
+import logging
+
+# ========================================
+# CONFIGURATION DU LOGGING (CRITIQUE)
+# ========================================
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+# Forcer l'affichage immédiat (pour Render)
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+logger = logging.getLogger(__name__)
 
 # Configuration
 intents = discord.Intents.default()
@@ -72,7 +92,6 @@ CATEGORIES = {
 
 # Headers pour éviter la détection
 HEADERS = {
-    # Nouveau User-Agent
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
@@ -84,67 +103,87 @@ HEADERS = {
 
 async def search_pinterest(query: str, max_results: int = 20):
     """Scraper Pinterest pour récupérer des images"""
+    logger.info(f"🔍 DÉBUT de la recherche pour: '{query}'")
+    
     try:
         # Formater la query pour l'URL Pinterest
         search_query = query.replace(' ', '%20')
         url = f"https://www.pinterest.com/search/pins/?q={search_query}"
         
-        # DEBUG: Afficher l'URL exacte
-        print(f"🔍 Requête Pinterest lancée : {url}")
+        logger.info(f"📌 URL générée: {url}")
+        logger.info(f"⏳ Délai de 2 secondes avant la requête...")
         
         # Délai de 2 secondes pour éviter le blocage d'IP
-        await asyncio.sleep(2) 
+        await asyncio.sleep(2)
+        
+        logger.info(f"🌐 Envoi de la requête HTTP vers Pinterest...")
         
         async with aiohttp.ClientSession(headers=HEADERS) as session:
-            # Augmentation du timeout à 20 secondes
             async with session.get(url, timeout=20) as response:
+                logger.info(f"📥 Réponse reçue - Status Code: {response.status}")
+                
                 if response.status != 200:
-                    print(f"❌ Erreur HTTP {response.status} pour la requête: {query}")
+                    logger.error(f"❌ Erreur HTTP {response.status} pour la requête: {query}")
                     return None
                 
                 html = await response.text()
+                logger.info(f"📄 HTML reçu - Taille: {len(html)} caractères")
+                
                 soup = BeautifulSoup(html, 'html.parser')
                 
-                # Chercher les URLs d'images dans le HTML (Méthodes 1 & 2)
+                # Chercher les URLs d'images dans le HTML
                 image_urls = []
                 
                 # Méthode 1: Chercher dans les balises img
-                for img in soup.find_all('img'):
+                logger.info(f"🔎 Méthode 1: Recherche dans les balises <img>...")
+                img_tags = soup.find_all('img')
+                logger.info(f"   Trouvé {len(img_tags)} balises <img>")
+                
+                for img in img_tags:
                     src = img.get('src')
                     if src and 'pinimg.com' in src:
                         high_res = src.replace('236x', '736x').replace('474x', '736x')
                         if high_res not in image_urls:
                             image_urls.append(high_res)
                 
+                logger.info(f"   ✅ {len(image_urls)} URLs trouvées via <img>")
+                
                 # Méthode 2: Chercher dans le JSON embarqué
+                logger.info(f"🔎 Méthode 2: Recherche dans le JSON embarqué...")
                 scripts = soup.find_all('script', {'id': '__PWS_DATA__'})
+                logger.info(f"   Trouvé {len(scripts)} scripts avec id='__PWS_DATA__'")
+                
                 for script in scripts:
                     content = script.string
                     if content:
                         urls = re.findall(r'https://i\.pinimg\.com/[^"\']+\.jpg', content)
+                        logger.info(f"   Trouvé {len(urls)} URLs dans le JSON")
                         for url in urls:
                             high_res = url.replace('236x', '736x').replace('474x', '736x')
                             if high_res not in image_urls:
                                 image_urls.append(high_res)
                 
-                # Filtrer et renvoyer les résultats
+                logger.info(f"   ✅ Total: {len(image_urls)} URLs uniques")
+                
+                # Filtrer pour avoir que des images de bonne qualité
                 quality_urls = [url for url in image_urls if '736x' in url or 'originals' in url]
                 
                 if not quality_urls and image_urls:
                     quality_urls = image_urls[:max_results]
                 
                 if quality_urls:
-                    print(f"✅ Scraping réussi : {len(quality_urls)} images trouvées pour {query}")
+                    logger.info(f"✅ SUCCÈS: {len(quality_urls)} images de qualité trouvées pour '{query}'")
+                    return quality_urls[:max_results]
                 else:
-                    print(f"⚠️ Scraping échoué : Aucune image trouvée après analyse pour {query}")
-                    
-                return quality_urls[:max_results] if quality_urls else None
+                    logger.warning(f"⚠️ ÉCHEC: Aucune image trouvée après analyse pour '{query}'")
+                    logger.warning(f"   Vérifiez si Pinterest a changé sa structure HTML/JSON")
+                    return None
                 
     except asyncio.TimeoutError:
-        print(f"❌ Erreur Pinterest scraping: Timeout (Délai d'attente dépassé) pour {query}")
+        logger.error(f"❌ TIMEOUT: Délai d'attente dépassé (>20s) pour '{query}'")
         return None
     except Exception as e:
-        print(f"❌ Erreur Pinterest scraping générale pour {query}: {e.__class__.__name__}: {e}")
+        logger.error(f"❌ ERREUR GÉNÉRALE pour '{query}': {e.__class__.__name__}: {e}")
         return None
 
 # Modal pour recherche personnalisée
@@ -163,6 +202,8 @@ class CustomSearchModal(discord.ui.Modal):
     
     async def on_submit(self, interaction: discord.Interaction):
         query = self.search_input.value
+        logger.info(f"🎯 Recherche personnalisée demandée par {interaction.user}: '{query}'")
+        
         await interaction.response.edit_message(
             content=f"📌 Recherche Pinterest pour **{query}**...\n⏳ Cela peut prendre quelques secondes...",
             embed=None,
@@ -173,7 +214,6 @@ class CustomSearchModal(discord.ui.Modal):
         
         if images:
             image_url = random.choice(images)
-            
             embed = discord.Embed(
                 title=f"📸 {query.title()}",
                 description="🔍 Recherche personnalisée Pinterest",
@@ -209,13 +249,11 @@ class CategorySelect(discord.ui.Select):
         subcategories = CATEGORIES[selected_category]
         
         view = SubcategoryView(selected_category, subcategories)
-        
         embed = discord.Embed(
             title=f"{selected_category}",
             description=f"Choisis un style spécifique parmi **{len(subcategories)}** options !",
             color=discord.Color.purple()
         )
-        
         await interaction.response.edit_message(embed=embed, view=view)
 
 class CategorySelect2(discord.ui.Select):
@@ -232,13 +270,11 @@ class CategorySelect2(discord.ui.Select):
         subcategories = CATEGORIES[selected_category]
         
         view = SubcategoryView(selected_category, subcategories)
-        
         embed = discord.Embed(
             title=f"{selected_category}",
             description=f"Choisis un style spécifique parmi **{len(subcategories)}** options !",
             color=discord.Color.purple()
         )
-        
         await interaction.response.edit_message(embed=embed, view=view)
 
 class CategoryView(discord.ui.View):
@@ -267,6 +303,7 @@ class SubcategorySelect(discord.ui.Select):
     
     async def callback(self, interaction: discord.Interaction):
         selected_style = self.values[0]
+        logger.info(f"🎯 Style sélectionné par {interaction.user}: '{selected_style}' (Catégorie: {self.category})")
         
         await interaction.response.edit_message(
             content=f"📌 Recherche Pinterest pour **{selected_style}**...\n⏳ Cela peut prendre quelques secondes...",
@@ -278,7 +315,6 @@ class SubcategorySelect(discord.ui.Select):
         
         if images:
             image_url = random.choice(images)
-            
             embed = discord.Embed(
                 title=f"📸 {selected_style.title()}",
                 description=f"Catégorie: {self.category}",
@@ -328,6 +364,8 @@ class RefreshView(discord.ui.View):
     
     @discord.ui.button(label="🔄 Autre image", style=discord.ButtonStyle.primary, emoji="🔄")
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        logger.info(f"🔄 Rafraîchissement demandé par {interaction.user} pour '{self.query}'")
+        
         await interaction.response.edit_message(
             content=f"📌 Recherche d'une nouvelle image...",
             embed=None,
@@ -338,7 +376,6 @@ class RefreshView(discord.ui.View):
         
         if images:
             image_url = random.choice(images)
-            
             embed = discord.Embed(
                 title=f"📸 {self.query.title()}",
                 description=f"Catégorie: {self.category}",
@@ -373,20 +410,21 @@ class RefreshView(discord.ui.View):
 
 @bot.event
 async def on_ready():
-    print(f'✅ {bot.user} est connecté !')
-    print(f'📊 Serveurs: {len(bot.guilds)}')
-    print(f'🎨 Catégories: {len(CATEGORIES)}')
+    logger.info(f'✅ {bot.user} est connecté à Discord !')
+    logger.info(f'📊 Serveurs: {len(bot.guilds)}')
+    logger.info(f'🎨 Catégories disponibles: {len(CATEGORIES)}')
     total_styles = sum(len(styles) for styles in CATEGORIES.values())
-    print(f'✨ Total de styles: {total_styles}')
-    print('📌 Mode: Pinterest scraping (Optimisé)')
-    print('🌐 Serveur web actif sur port 8080')
-    print('━' * 50)
+    logger.info(f'✨ Total de styles: {total_styles}')
+    logger.info('📌 Mode: Pinterest scraping (Optimisé avec Logging)')
+    logger.info('🌐 Serveur web Flask actif sur port 8080')
+    logger.info('━' * 50)
 
 @bot.command(name='pdp')
 async def search_pfp(ctx):
     """Commande principale pour rechercher des photos de profil"""
-    view = CategoryView()
+    logger.info(f"📋 Commande !pdp utilisée par {ctx.author} dans #{ctx.channel}")
     
+    view = CategoryView()
     embed = discord.Embed(
         title="🎨 Recherche de Photo de Profil Pinterest",
         description=f"**{len(CATEGORIES)} catégories** disponibles avec **200+ styles** !\n\n"
@@ -400,19 +438,19 @@ async def search_pfp(ctx):
         color=discord.Color.red()
     )
     embed.set_footer(text="📌 Utilise les menus ci-dessous 👇")
-    
     await ctx.send(embed=embed, view=view)
 
 @bot.command(name='recherche')
 async def quick_search(ctx, *, query: str):
     """Recherche rapide sans menu"""
+    logger.info(f"🔍 Commande !recherche utilisée par {ctx.author}: '{query}'")
+    
     msg = await ctx.send(f"📌 Recherche Pinterest pour **{query}**...")
     
     images = await search_pinterest(query)
     
     if images:
         image_url = random.choice(images)
-        
         embed = discord.Embed(
             title=f"📸 {query.title()}",
             description="Recherche rapide Pinterest",
@@ -434,6 +472,8 @@ async def quick_search(ctx, *, query: str):
 @bot.command(name='categories')
 async def list_categories(ctx):
     """Liste toutes les catégories disponibles"""
+    logger.info(f"📋 Commande !categories utilisée par {ctx.author}")
+    
     embed = discord.Embed(
         title=f"📋 Toutes les Catégories ({len(CATEGORIES)})",
         description="Voici toutes les catégories et styles disponibles:",
@@ -461,6 +501,8 @@ async def list_categories(ctx):
 @bot.command(name='aide')
 async def help_cmd(ctx):
     """Affiche l'aide"""
+    logger.info(f"📚 Commande !aide utilisée par {ctx.author}")
+    
     embed = discord.Embed(
         title="📚 Aide - Bot Photo de Profil Pinterest",
         description="Voici comment utiliser le bot:",
@@ -482,7 +524,6 @@ async def help_cmd(ctx):
         value="📋 Affiche toutes les catégories",
         inline=False
     )
-    
     embed.add_field(
         name="⚠️ Note",
         value="Ce bot utilise Pinterest. Les résultats peuvent parfois être limités.",
@@ -494,10 +535,12 @@ async def help_cmd(ctx):
 # 🚀 LANCEMENT
 if __name__ == '__main__':
     if not DISCORD_TOKEN:
-        print("❌ ERREUR: DISCORD_TOKEN manquant !")
+        logger.error("❌ ERREUR CRITIQUE: DISCORD_TOKEN manquant dans les variables d'environnement !")
     else:
-        print("🚀 Démarrage du bot Pinterest...")
+        logger.info("🚀 Démarrage du bot Pinterest avec logging amélioré...")
+        
         # Lancer Flask dans un thread séparé
-        Thread(target=run_flask).start()
+        Thread(target=run_flask, daemon=True).start()
+        
         # Lancer le bot Discord
         bot.run(DISCORD_TOKEN)
