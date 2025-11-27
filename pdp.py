@@ -10,9 +10,10 @@ from flask import Flask
 import asyncio
 import sys
 import logging
+import json # NOUVELLE IMPORTATION
 
 # ========================================
-# CONFIGURATION DU LOGGING (CRITIQUE)
+# CONFIGURATION DU LOGGING
 # ========================================
 logging.basicConfig(
     level=logging.INFO,
@@ -49,7 +50,35 @@ def health():
     return {"status": "alive", "bot": str(bot.user) if bot.user else "Initialisation..."}
 
 def run_flask():
-    app.run(host='0.0.0.0', port=8080)
+    # Utilisation de gunicorn si disponible, sinon un serveur simple
+    try:
+        import gunicorn.app.base
+        
+        class StandaloneApplication(gunicorn.app.base.BaseApplication):
+            def __init__(self, app, options=None):
+                self.options = options or {}
+                self.application = app
+                super().__init__()
+
+            def load_config(self):
+                config = {key: value for key, value in self.options.items()
+                          if key in self.cfg.settings and value is not None}
+                for key, value in config.items():
+                    self.cfg.set(key.lower(), value)
+
+            def load(self):
+                return self.application
+
+        options = {
+            'bind': '0.0.0.0:8080',
+            'workers': 1,
+            'log-level': 'warning',
+        }
+        StandaloneApplication(app, options).run()
+    except ImportError:
+        # Fallback si gunicorn n'est pas installé (moins robuste)
+        app.run(host='0.0.0.0', port=8080)
+
 
 # BEAUCOUP PLUS DE CATÉGORIES (35 catégories)
 CATEGORIES = {
@@ -102,7 +131,10 @@ HEADERS = {
 }
 
 async def search_pinterest(query: str, max_results: int = 20):
-    """Scraper Pinterest pour récupérer des images"""
+    """
+    Scraper Pinterest pour récupérer des images.
+    CORRECTION: Mise à jour du parsing JSON pour s'adapter aux changements de Pinterest.
+    """
     logger.info(f"🔍 DÉBUT de la recherche pour: '{query}'")
     
     try:
@@ -130,45 +162,73 @@ async def search_pinterest(query: str, max_results: int = 20):
                 logger.info(f"📄 HTML reçu - Taille: {len(html)} caractères")
                 
                 soup = BeautifulSoup(html, 'html.parser')
-                
-                # Chercher les URLs d'images dans le HTML
                 image_urls = []
                 
-                # Méthode 1: Chercher dans les balises img
+                # Méthode 1: Chercher dans les balises img (Gardée mais inefficace sur Pinterest moderne)
                 logger.info(f"🔎 Méthode 1: Recherche dans les balises <img>...")
                 img_tags = soup.find_all('img')
-                logger.info(f"   Trouvé {len(img_tags)} balises <img>")
+                # logger.info(f"    Trouvé {len(img_tags)} balises <img>")
                 
                 for img in img_tags:
                     src = img.get('src')
+                    # Tentative de convertir en haute résolution
                     if src and 'pinimg.com' in src:
                         high_res = src.replace('236x', '736x').replace('474x', '736x')
                         if high_res not in image_urls:
                             image_urls.append(high_res)
                 
-                logger.info(f"   ✅ {len(image_urls)} URLs trouvées via <img>")
+                logger.info(f"    ✅ {len(image_urls)} URLs trouvées via <img>")
                 
-                # Méthode 2: Chercher dans le JSON embarqué
-                logger.info(f"🔎 Méthode 2: Recherche dans le JSON embarqué...")
+                # CORRECTION: Méthode 2: Parsing du JSON embarqué (Fiable)
+                logger.info(f"🔎 Méthode 2: Recherche dans le JSON embarqué (Parsing JSON)...")
                 scripts = soup.find_all('script', {'id': '__PWS_DATA__'})
-                logger.info(f"   Trouvé {len(scripts)} scripts avec id='__PWS_DATA__'")
+                logger.info(f"    Trouvé {len(scripts)} scripts avec id='__PWS_DATA__'")
                 
-                for script in scripts:
-                    content = script.string
-                    if content:
-                        urls = re.findall(r'https://i\.pinimg\.com/[^"\']+\.jpg', content)
-                        logger.info(f"   Trouvé {len(urls)} URLs dans le JSON")
-                        for url in urls:
-                            high_res = url.replace('236x', '736x').replace('474x', '736x')
-                            if high_res not in image_urls:
-                                image_urls.append(high_res)
+                if scripts:
+                    try:
+                        # 1. Décoder le JSON
+                        content = scripts[0].string
+                        # Supprimer les sauts de ligne pour éviter les erreurs de décodage
+                        data = json.loads(content.strip())
+                        
+                        # 2. CHEMIN D'ACCÈS ACTUEL AUX ÉPINGLES
+                        # C'est la partie qui a été modifiée par Pinterest
+                        
+                        # Ce chemin est souvent fiable pour la recherche:
+                        results = data['resourceResponses'][0]['response']['data']['results']
+                        
+                        count = 0
+                        for pin in results:
+                            # Tenter d'extraire l'URL originale ou 736x
+                            if 'images' in pin:
+                                if 'orig' in pin['images']:
+                                    high_res_url = pin['images']['orig']['url']
+                                elif '736x' in pin['images']:
+                                    high_res_url = pin['images']['736x']['url']
+                                else:
+                                    continue # Passer si l'URL n'est pas trouvée
+                                    
+                                if high_res_url not in image_urls:
+                                    image_urls.append(high_res_url)
+                                    count += 1
+
+                        logger.info(f"    ✅ {count} URLs trouvées via le JSON (Nouveau chemin)")
+                        
+                    except json.JSONDecodeError:
+                        logger.error("❌ ERREUR JSON: Impossible de décoder le contenu de __PWS_DATA__.")
+                    except KeyError as e:
+                        logger.error(f"❌ ERREUR KEY: La structure JSON a changé (Clé manquante: {e}).")
+                    except IndexError:
+                        logger.error("❌ ERREUR INDEX: Contenu de __PWS_DATA__ vide ou mal formé.")
                 
-                logger.info(f"   ✅ Total: {len(image_urls)} URLs uniques")
+                
+                logger.info(f"    ✅ Total: {len(image_urls)} URLs uniques")
                 
                 # Filtrer pour avoir que des images de bonne qualité
                 quality_urls = [url for url in image_urls if '736x' in url or 'originals' in url]
                 
                 if not quality_urls and image_urls:
+                    # Si aucune URL de "qualité" n'est trouvée, utiliser les premières trouvées
                     quality_urls = image_urls[:max_results]
                 
                 if quality_urls:
@@ -176,9 +236,9 @@ async def search_pinterest(query: str, max_results: int = 20):
                     return quality_urls[:max_results]
                 else:
                     logger.warning(f"⚠️ ÉCHEC: Aucune image trouvée après analyse pour '{query}'")
-                    logger.warning(f"   Vérifiez si Pinterest a changé sa structure HTML/JSON")
+                    logger.warning(f"    Vérifiez si Pinterest a changé sa structure HTML/JSON")
                     return None
-                
+                    
     except asyncio.TimeoutError:
         logger.error(f"❌ TIMEOUT: Délai d'attente dépassé (>20s) pour '{query}'")
         return None
