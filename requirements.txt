@@ -1,8 +1,6 @@
 discord.py
 aiohttp
-aiohttp[speedups]
 beautifulsoup4
 Flask
 gunicorn
-Brotli
 brotlipy
