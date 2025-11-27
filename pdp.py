@@ -7,7 +7,7 @@ import re
 from bs4 import BeautifulSoup
 from threading import Thread
 from flask import Flask
-import asyncio # <-- NOUVEAU: Ajout pour le délai asynchrone
+import asyncio # <-- Ajouté pour le délai asynchrone
 
 # Configuration
 intents = discord.Intents.default()
@@ -26,7 +26,6 @@ def home():
 
 @app.route('/health')
 def health():
-    # Afficher le statut du bot
     return {"status": "alive", "bot": str(bot.user) if bot.user else "Initialisation..."}
 
 def run_flask():
@@ -73,7 +72,7 @@ CATEGORIES = {
 
 # Headers pour éviter la détection
 HEADERS = {
-    # MODIFIÉ: Nouvel User-Agent pour améliorer la résistance au blocage
+    # Nouveau User-Agent
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
@@ -90,56 +89,62 @@ async def search_pinterest(query: str, max_results: int = 20):
         search_query = query.replace(' ', '%20')
         url = f"https://www.pinterest.com/search/pins/?q={search_query}"
         
-        # AJOUTÉ: Délai de 2 secondes pour éviter le blocage d'IP
+        # DEBUG: Afficher l'URL exacte
+        print(f"🔍 Requête Pinterest lancée : {url}")
+        
+        # Délai de 2 secondes pour éviter le blocage d'IP
         await asyncio.sleep(2) 
         
         async with aiohttp.ClientSession(headers=HEADERS) as session:
-            # MODIFIÉ: Augmentation du timeout à 20 secondes
+            # Augmentation du timeout à 20 secondes
             async with session.get(url, timeout=20) as response:
                 if response.status != 200:
-                    print(f"Erreur HTTP {response.status} pour la requête: {query}")
+                    print(f"❌ Erreur HTTP {response.status} pour la requête: {query}")
                     return None
                 
                 html = await response.text()
                 soup = BeautifulSoup(html, 'html.parser')
                 
-                # Chercher les URLs d'images dans le HTML
+                # Chercher les URLs d'images dans le HTML (Méthodes 1 & 2)
                 image_urls = []
                 
                 # Méthode 1: Chercher dans les balises img
                 for img in soup.find_all('img'):
                     src = img.get('src')
                     if src and 'pinimg.com' in src:
-                        # Remplacer les URLs basse résolution par haute résolution
                         high_res = src.replace('236x', '736x').replace('474x', '736x')
                         if high_res not in image_urls:
                             image_urls.append(high_res)
                 
-                # Méthode 2: Chercher dans le JSON embarqué (Pinterest utilise du JSON dans le HTML)
+                # Méthode 2: Chercher dans le JSON embarqué
                 scripts = soup.find_all('script', {'id': '__PWS_DATA__'})
                 for script in scripts:
                     content = script.string
                     if content:
-                        # Extraire les URLs d'images du JSON
                         urls = re.findall(r'https://i\.pinimg\.com/[^"\']+\.jpg', content)
                         for url in urls:
                             high_res = url.replace('236x', '736x').replace('474x', '736x')
                             if high_res not in image_urls:
                                 image_urls.append(high_res)
                 
-                # Filtrer pour avoir que des images de bonne qualité
+                # Filtrer et renvoyer les résultats
                 quality_urls = [url for url in image_urls if '736x' in url or 'originals' in url]
                 
                 if not quality_urls and image_urls:
                     quality_urls = image_urls[:max_results]
                 
+                if quality_urls:
+                    print(f"✅ Scraping réussi : {len(quality_urls)} images trouvées pour {query}")
+                else:
+                    print(f"⚠️ Scraping échoué : Aucune image trouvée après analyse pour {query}")
+                    
                 return quality_urls[:max_results] if quality_urls else None
                 
     except asyncio.TimeoutError:
         print(f"❌ Erreur Pinterest scraping: Timeout (Délai d'attente dépassé) pour {query}")
         return None
     except Exception as e:
-        print(f"❌ Erreur Pinterest scraping générale pour {query}: {e}")
+        print(f"❌ Erreur Pinterest scraping générale pour {query}: {e.__class__.__name__}: {e}")
         return None
 
 # Modal pour recherche personnalisée
@@ -186,7 +191,7 @@ class CustomSearchModal(discord.ui.Modal):
             await interaction.edit_original_response(content=None, embed=embed, view=view)
         else:
             await interaction.edit_original_response(
-                content=f"❌ Aucune image trouvée pour **{query}**\n💡 Essaye avec d'autres mots-clés !",
+                content=f"❌ Aucune image trouvée pour **{query}**\n💡 Problème de scraping. Essaye avec d'autres mots-clés !",
                 embed=None
             )
 
