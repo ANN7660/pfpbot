@@ -1,346 +1,168 @@
 import discord
 from discord.ext import commands
 import os
+import aiohttp
 import random
-import re
-from bs4 import BeautifulSoup
+import logging
+import sys
 from threading import Thread
 from flask import Flask
-import asyncio
-import sys
-import logging
-import json 
-# 🛑 NOUVELLE LIBRAIRIE
-import cloudscraper 
 
 # ========================================
-# CONFIGURATION DU LOGGING
-# (INCHANGÉ)
+# LOGGING
 # ========================================
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
+    handlers=[logging.StreamHandler(sys.stdout)]
 )
-
-sys.stdout.reconfigure(line_buffering=True)
-sys.stderr.reconfigure(line_buffering=True)
-
 logger = logging.getLogger(__name__)
 
-# Configuration du bot
+# ========================================
+# CONFIGURATION
+# ========================================
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Récupération du token
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
-# 🌐 SERVEUR WEB FLASK
+# ========================================
+# FLASK (KEEP ALIVE)
+# ========================================
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "✅ Bot Discord Pinterest actif !"
+    return "✅ Bot Discord actif!"
 
 @app.route('/health')
 def health():
-    return {"status": "alive", "bot": str(bot.user) if bot.user else "Initialisation..."}
+    return {"status": "alive", "bot": str(bot.user) if bot.user else "Starting..."}
 
 def run_flask():
-    """Lance le serveur Flask simple dans un thread séparé."""
-    logger.info("🌐 Démarrage du serveur Flask simple sur 0.0.0.0:8080...")
+    logger.info("🌐 Flask sur port 8080...")
     try:
         app.run(host='0.0.0.0', port=8080, use_reloader=False)
     except Exception as e:
-        logger.error(f"❌ ERREUR LORS DU LANCEMENT DE FLASK: {e}")
+        logger.error(f"❌ Flask erreur: {e}")
 
-# 🎨 Dictionnaire des CATÉGORIES (Liste complète)
+# ========================================
+# CATÉGORIES
+# ========================================
 CATEGORIES = {
-    "🎨 Aesthetic": ["aesthetic pink", "aesthetic blue", "aesthetic purple", "aesthetic dark", "aesthetic light", "aesthetic vintage"],
-    "😎 Anime": ["anime boy", "anime girl", "anime aesthetic", "anime dark", "manga", "anime pfp", "anime cool", "anime kawaii"],
-    "🌙 Dark": ["dark aesthetic", "dark grunge", "dark angel", "dark red", "dark blue", "dark purple", "gothic dark"],
-    "✨ Cute": ["cute aesthetic", "cute anime", "cute pastel", "kawaii", "soft aesthetic", "adorable", "cute cat"],
-    "🎮 Gaming": ["gaming setup", "gaming aesthetic", "cyberpunk", "gamer", "gaming neon", "esports", "gaming rgb"],
-    "🔥 Grunge": ["grunge aesthetic", "grunge dark", "grunge y2k", "grunge red", "grunge indie", "grunge vintage"],
-    "💜 Y2K": ["y2k aesthetic", "y2k cyber", "y2k pink", "y2k purple", "y2k star", "y2k butterfly", "y2k sparkle"],
-    "🌸 Pastel": ["pastel pink", "pastel blue", "pastel aesthetic", "soft pastel", "pastel kawaii", "pastel rainbow"],
-    "⚫ Monochrome": ["black aesthetic", "white aesthetic", "grey aesthetic", "monochrome art", "black and white"],
-    "🌈 Colorful": ["colorful aesthetic", "rainbow aesthetic", "neon aesthetic", "vibrant colors", "bright colors"],
-    "🎭 Alternative": ["alt aesthetic", "goth aesthetic", "emo aesthetic", "punk aesthetic", "scene aesthetic"],
-    "🌟 Space": ["space aesthetic", "galaxy aesthetic", "stars aesthetic", "cosmic aesthetic", "nebula", "astronaut"],
-    "🏙️ Urban": ["city aesthetic", "urban aesthetic", "street aesthetic", "tokyo aesthetic", "cyberpunk city"],
-    "🌺 Nature": ["nature aesthetic", "flower aesthetic", "sunset aesthetic", "beach aesthetic", "forest aesthetic"],
-    "👑 Luxury": ["luxury aesthetic", "gold aesthetic", "elegant aesthetic", "classy aesthetic", "designer"],
-    "💀 Edgy": ["edgy aesthetic", "skeleton", "skull aesthetic", "badass", "rebel aesthetic", "chains aesthetic"],
-    "🎵 Music": ["music aesthetic", "singer", "band aesthetic", "rock aesthetic", "rap aesthetic", "headphones"],
-    "⚡ Neon": ["neon aesthetic", "neon lights", "neon pink", "neon blue", "cyberpunk neon", "neon city"],
-    "🌸 Cottagecore": ["cottagecore aesthetic", "cottage", "fairycore", "forest cottage", "mushroom aesthetic"],
-    "🦋 Indie": ["indie aesthetic", "indie kid", "indie grunge", "indie vintage", "indie bedroom"],
-    "💎 Baddie": ["baddie aesthetic", "bad girl", "hot aesthetic", "confident aesthetic", "boss aesthetic"],
-    "🌊 Ocean": ["ocean aesthetic", "sea aesthetic", "beach waves", "mermaid", "underwater aesthetic"],
-    "🔮 Witchy": ["witchy aesthetic", "witch", "magic aesthetic", "crystals", "mystical aesthetic"],
-    "👾 Retro": ["retro aesthetic", "90s aesthetic", "80s aesthetic", "vintage retro", "arcade aesthetic"],
-    "🎬 Cinema": ["cinema aesthetic", "movie aesthetic", "film aesthetic", "director", "vintage film"],
-    "🌙 Dreamy": ["dreamy aesthetic", "cloud aesthetic", "soft dreamy", "ethereal", "fantasy dreamy"],
-    "🍓 Kawaii": ["kawaii aesthetic", "sanrio", "hello kitty", "cute kawaii", "japanese kawaii"],
-    "⛓️ Chains": ["chains aesthetic", "chain grunge", "chain jewelry", "metal chains", "silver chains"],
-    "🌹 Romance": ["romance aesthetic", "love aesthetic", "romantic", "valentine", "couple aesthetic"],
-    "🎪 Circus": ["circus aesthetic", "carnival", "clown aesthetic", "vintage circus", "fairground"],
-    "🏍️ Biker": ["biker aesthetic", "motorcycle", "leather jacket", "rebel biker", "harley aesthetic"],
-    "📚 Academia": ["dark academia", "light academia", "library aesthetic", "bookish", "vintage academia"],
-    "🌃 Nightcore": ["nightcore aesthetic", "night aesthetic", "midnight", "night city", "late night"],
-    "🎀 Coquette": ["coquette aesthetic", "bow aesthetic", "pink coquette", "soft coquette", "ribbon aesthetic"],
-    "🔥 Sigma": ["sigma male", "sigma aesthetic", "lone wolf", "alpha aesthetic", "motivation aesthetic"]
+    "😎 Anime": {
+        "api": "waifu.pics",
+        "tags": ["waifu", "neko", "shinobu", "megumin", "bully", "cuddle", "cry", "hug", "awoo", "kiss", "lick", "pat", "smug", "bonk", "yeet", "blush", "smile", "wave", "highfive", "handhold", "nom", "bite", "glomp", "slap", "kill", "kick", "happy", "wink", "poke", "dance", "cringe"]
+    },
+    "😺 Nekos": {
+        "api": "nekos.best",
+        "tags": ["neko", "kitsune", "waifu", "husbando"]
+    },
+    "✨ Waifu": {
+        "api": "waifu.im",
+        "tags": ["waifu", "maid", "marin-kitagawa", "raiden-shogun", "selfies", "uniform"]
+    }
 }
 
-# ⚠️ HEADERS sont conservés pour être passés à cloudscraper, même si cloudscraper 
-# peut gérer les headers lui-même pour l'anti-bot
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate', 
-    'DNT': '1',
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1'
-}
-
-# Initialisation du scraper cloudscraper
-scraper = cloudscraper.create_scraper()
-
-def fetch_pinterest_sync(url: str, query: str):
-    """Fonction synchrone utilisant cloudscraper (exécutée dans un thread séparé)."""
-    
-    # 1. Requête HTTP utilisant cloudscraper
+# ========================================
+# APIS
+# ========================================
+async def fetch_waifu_pics(tag: str) -> str:
+    """API Waifu.pics"""
+    url = f"https://api.waifu.pics/sfw/{tag}"
     try:
-        logger.info(f"🌐 Envoi de la requête HTTP via cloudscraper vers Pinterest (URL: {url})...")
-        response = scraper.get(url, headers=HEADERS, timeout=20)
-        logger.info(f"📥 Réponse reçue - Status Code: {response.status_code}")
-        
-        if response.status_code != 200:
-            logger.error(f"❌ Erreur HTTP {response.status_code} pour la requête: {query}")
-            return None
-        
-        html = response.text
-        logger.info(f"📄 HTML reçu - Taille: {len(html)} caractères")
-        return html
-        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get('url')
     except Exception as e:
-        logger.error(f"❌ ERREUR CLOUDSCRAPER pour '{query}': {e.__class__.__name__}: {e}")
-        return None
+        logger.error(f"❌ Waifu.pics: {e}")
+    return None
 
-async def search_pinterest(query: str, max_results: int = 20):
-    """
-    Fonction asynchrone pour l'interface Discord, utilise asyncio.to_thread 
-    pour exécuter cloudscraper sans bloquer le loop principal.
-    """
-    logger.info(f"🔍 DÉBUT de la recherche pour: '{query}' (via cloudscraper)")
-    
-    search_query = query.replace(' ', '%20')
-    url = f"https://www.pinterest.com/search/pins/?q={search_query}"
-    logger.info(f"📌 URL générée: {url}")
-    logger.info(f"⏳ Délai de 2 secondes avant la requête...")
-    await asyncio.sleep(2)
-    
-    # Exécuter la fonction synchrone dans un thread séparé
-    html = await asyncio.to_thread(fetch_pinterest_sync, url, query)
-
-    if html is None:
-        logger.warning(f"⚠️ ÉCHEC: Aucune page HTML valide reçue pour '{query}'")
-        return None
-
-    # Suite du parsing (inchangée car il dépend de l'HTML)
+async def fetch_nekos_best(tag: str) -> str:
+    """API Nekos.best"""
+    url = f"https://nekos.best/api/v2/{tag}"
     try:
-        soup = BeautifulSoup(html, 'html.parser')
-        image_urls = []
-        
-        # Méthode 1: Chercher dans les balises img 
-        logger.info(f"🔎 Méthode 1: Recherche dans les balises <img>...")
-        img_tags = soup.find_all('img')
-        
-        for img in img_tags:
-            src = img.get('src')
-            if src and 'pinimg.com' in src:
-                high_res = src.replace('236x', '736x').replace('474x', '736x')
-                if high_res not in image_urls:
-                    image_urls.append(high_res)
-        
-        logger.info(f"    ✅ {len(image_urls)} URLs trouvées via <img>")
-
-
-        # Méthode 2: Parsing structuré (Le plus important)
-        logger.info(f"🔎 Méthode 2: Recherche dans le JSON embarqué (Parsing structuré + Fallback)...")
-        scripts = soup.find_all('script', {'id': '__PWS_DATA__'})
-        logger.info(f"    Trouvé {len(scripts)} scripts avec id='__PWS_DATA__'")
-        
-        if scripts:
-            content = scripts[0].string
-            
-            # Tentative 1: Parsing structuré du JSON 
-            try:
-                data = json.loads(content.strip())
-                results = []
-                results_data = {}
-                
-                if 'resourceResponses' in data and len(data['resourceResponses']) > 0:
-                    results_data = data['resourceResponses'][0]['response']['data']
-                elif 'initialReduxState' in data and 'pins' in data['initialReduxState']:
-                    results_data = data['initialReduxState']['pins']
-                
-                if results_data and 'data' in results_data:
-                    results = results_data['data']
-                elif results_data and 'results' in results_data:
-                    results = results_data['results']
-                
-                count = 0
-                for pin in results:
-                    if isinstance(pin, dict) and 'images' in pin:
-                        if 'orig' in pin['images']:
-                            high_res_url = pin['images']['orig']['url']
-                        elif '736x' in pin['images']:
-                            high_res_url = pin['images']['736x']['url']
-                        else:
-                            continue
-                            
-                        if high_res_url not in image_urls:
-                            image_urls.append(high_res_url)
-                            count += 1
-
-                logger.info(f"    ✅ {count} URLs trouvées via le JSON structuré.")
-
-            except json.JSONDecodeError:
-                logger.error("❌ ERREUR JSON: Impossible de décoder le contenu de __PWS_DATA__.")
-            except Exception as e:
-                logger.warning(f"⚠️ ERREUR PARSING JSON: {e.__class__.__name__}: {e}. Tentative de fallback Regex...")
-
-            # Tentative 2 (Fallback): Regex de sécurité 
-            if len(image_urls) < 5: 
-                logger.info("🔎 Fallback Regex: Recherche des URLs brutes...")
-                urls_from_regex = re.findall(r'https://i\.pinimg\.com/[^"\']+\.jpg', content)
-                
-                count_regex = 0
-                for url_brute in urls_from_regex:
-                    high_res = url_brute.replace('236x', '736x').replace('474x', '736x')
-                    if high_res not in image_urls:
-                        image_urls.append(high_res)
-                        count_regex += 1
-                
-                logger.info(f"    ✅ {count_regex} URLs trouvées via Regex.")
-        
-        
-        logger.info(f"    ✅ Total: {len(image_urls)} URLs uniques")
-        
-        # Filtrer pour avoir que des images de bonne qualité
-        quality_urls = [url for url in image_urls if '736x' in url or 'originals' in url]
-        
-        if not quality_urls and image_urls:
-            quality_urls = image_urls[:max_results]
-        
-        if quality_urls:
-            logger.info(f"✅ SUCCÈS: {len(quality_urls)} images de qualité trouvées pour '{query}'")
-            return quality_urls[:max_results]
-        else:
-            logger.warning(f"⚠️ ÉCHEC: Aucune image trouvée après analyse pour '{query}'")
-            return None
-            
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data['results'][0]['url']
     except Exception as e:
-        logger.error(f"❌ ERREUR LORS DU PARSING HTML/JSON pour '{query}': {e.__class__.__name__}: {e}")
+        logger.error(f"❌ Nekos.best: {e}")
+    return None
+
+async def fetch_waifu_im(tag: str) -> str:
+    """API Waifu.im"""
+    url = "https://api.waifu.im/search"
+    params = {"included_tags": tag, "is_nsfw": "false"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get('images'):
+                        return data['images'][0]['url']
+    except Exception as e:
+        logger.error(f"❌ Waifu.im: {e}")
+    return None
+
+async def get_image(category: str, tag: str) -> str:
+    """Récupère une image selon la catégorie"""
+    cat_data = CATEGORIES.get(category)
+    if not cat_data:
         return None
+    
+    api_type = cat_data["api"]
+    
+    if api_type == "waifu.pics":
+        return await fetch_waifu_pics(tag)
+    elif api_type == "nekos.best":
+        return await fetch_nekos_best(tag)
+    elif api_type == "waifu.im":
+        return await fetch_waifu_im(tag)
+    
+    return None
 
 # ========================================
-# CLASSES ET VUES INTERACTIVES (INCHANGÉES)
+# EMBEDS
 # ========================================
+def create_embed(title: str, image_url: str, category: str) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"📸 {title}",
+        description=f"Catégorie: {category}",
+        color=discord.Color.random()
+    )
+    embed.set_image(url=image_url)
+    embed.set_footer(text="🎨 API Anime")
+    return embed
 
-class CustomSearchModal(discord.ui.Modal):
-    def __init__(self):
-        super().__init__(title="🔍 Recherche Personnalisée")
-        
-        self.search_input = discord.ui.TextInput(
-            label="Que cherches-tu ?",
-            placeholder="Ex: red anime girl, dark aesthetic, cute cat...",
-            style=discord.TextStyle.short,
-            required=True,
-            max_length=100
-        )
-        self.add_item(self.search_input)
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        query = self.search_input.value
-        logger.info(f"🎯 Recherche personnalisée demandée par {interaction.user}: '{query}'")
-        
-        await interaction.response.edit_message(
-            content=f"📌 Recherche Pinterest pour **{query}**...\n⏳ Cela peut prendre quelques secondes...",
-            embed=None,
-            view=None
-        )
-        
-        images = await search_pinterest(query)
-        
-        if images:
-            image_url = random.choice(images)
-            embed = discord.Embed(
-                title=f"📸 {query.title()}",
-                description="🔍 Recherche personnalisée Pinterest",
-                color=discord.Color.red()
-            )
-            embed.set_image(url=image_url)
-            embed.set_footer(text="📌 Source: Pinterest")
-            embed.add_field(
-                name="🔗 Lien direct",
-                value=f"[Voir l'image]({image_url})",
-                inline=False
-            )
-            
-            view = RefreshView(query, "Recherche personnalisée")
-            await interaction.edit_original_response(content=None, embed=embed, view=view)
-        else:
-            await interaction.edit_original_response(
-                content=f"❌ Aucune image trouvée pour **{query}**\n💡 Problème de scraping. Essaye avec d'autres mots-clés !",
-                embed=None
-            )
-
+# ========================================
+# VUES DISCORD
+# ========================================
 class CategorySelect(discord.ui.Select):
     def __init__(self):
-        categories_list = list(CATEGORIES.items())[:25]
         options = [
-            discord.SelectOption(label=category, emoji=category.split()[0], description=f"{len(subcats)} styles")
-            for category, subcats in categories_list
+            discord.SelectOption(
+                label=cat,
+                emoji=cat.split()[0],
+                description=f"{len(CATEGORIES[cat]['tags'])} styles"
+            )
+            for cat in CATEGORIES.keys()
         ]
-        super().__init__(placeholder="🎨 Choisis une catégorie (Page 1/2)...", options=options, min_values=1, max_values=1)
+        super().__init__(placeholder="🎨 Choisis une catégorie...", options=options)
     
     async def callback(self, interaction: discord.Interaction):
-        selected_category = self.values[0]
-        subcategories = CATEGORIES[selected_category]
+        selected = self.values[0]
+        tags = CATEGORIES[selected]['tags']
         
-        view = SubcategoryView(selected_category, subcategories)
+        view = TagView(selected, tags)
         embed = discord.Embed(
-            title=f"{selected_category}",
-            description=f"Choisis un style spécifique parmi **{len(subcategories)}** options !",
-            color=discord.Color.purple()
-        )
-        await interaction.response.edit_message(embed=embed, view=view)
-
-class CategorySelect2(discord.ui.Select):
-    def __init__(self):
-        categories_list = list(CATEGORIES.items())[25:]
-        options = [
-            discord.SelectOption(label=category, emoji=category.split()[0], description=f"{len(subcats)} styles")
-            for category, subcats in categories_list
-        ]
-        super().__init__(placeholder="🎨 Choisis une catégorie (Page 2/2)...", options=options, min_values=1, max_values=1)
-    
-    async def callback(self, interaction: discord.Interaction):
-        selected_category = self.values[0]
-        subcategories = CATEGORIES[selected_category]
-        
-        view = SubcategoryView(selected_category, subcategories)
-        embed = discord.Embed(
-            title=f"{selected_category}",
-            description=f"Choisis un style spécifique parmi **{len(subcategories)}** options !",
+            title=f"{selected}",
+            description=f"**{len(tags)}** styles disponibles !",
             color=discord.Color.purple()
         )
         await interaction.response.edit_message(embed=embed, view=view)
@@ -349,274 +171,179 @@ class CategoryView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
         self.add_item(CategorySelect())
-        self.add_item(CategorySelect2())
-    
-    @discord.ui.button(label="🔍 Recherche personnalisée", style=discord.ButtonStyle.success, row=2)
-    async def custom_search_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = CustomSearchModal()
-        await interaction.response.send_modal(modal)
-    
-    @discord.ui.button(label="❌ Annuler", style=discord.ButtonStyle.danger, row=2)
-    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="✅ Recherche annulée !", embed=None, view=None)
-
-class SubcategorySelect(discord.ui.Select):
-    def __init__(self, category: str, subcategories: list):
-        self.category = category
-        options = [
-            discord.SelectOption(label=subcat.title(), value=subcat, description=f"Style: {subcat}")
-            for subcat in subcategories
-        ]
-        super().__init__(placeholder="✨ Choisis un style...", options=options, min_values=1, max_values=1)
-    
-    async def callback(self, interaction: discord.Interaction):
-        selected_style = self.values[0]
-        logger.info(f"🎯 Style sélectionné par {interaction.user}: '{selected_style}' (Catégorie: {self.category})")
-        
-        await interaction.response.edit_message(
-            content=f"📌 Recherche Pinterest pour **{selected_style}**...\n⏳ Cela peut prendre quelques secondes...",
-            embed=None,
-            view=None
-        )
-        
-        images = await search_pinterest(selected_style)
-        
-        if images:
-            image_url = random.choice(images)
-            embed = discord.Embed(
-                title=f"📸 {selected_style.title()}",
-                description=f"Catégorie: {self.category}",
-                color=discord.Color.red()
-            )
-            embed.set_image(url=image_url)
-            embed.set_footer(text="📌 Source: Pinterest")
-            embed.add_field(
-                name="🔗 Lien direct",
-                value=f"[Voir l'image]({image_url})",
-                inline=False
-            )
-            
-            view = RefreshView(selected_style, self.category)
-            await interaction.edit_original_response(content=None, embed=embed, view=view)
-        else:
-            await interaction.edit_original_response(
-                content=f"❌ Aucune image trouvée pour **{selected_style}**",
-                embed=None
-            )
-
-class SubcategoryView(discord.ui.View):
-    def __init__(self, category: str, subcategories: list):
-        super().__init__(timeout=180)
-        self.add_item(SubcategorySelect(category, subcategories))
-    
-    @discord.ui.button(label="⬅️ Retour", style=discord.ButtonStyle.secondary)
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = CategoryView()
-        embed = discord.Embed(
-            title="🎨 Recherche de Photo de Profil",
-            description=f"**{len(CATEGORIES)} catégories** disponibles avec **200+ styles** !\n\n"
-                        f"Tu peux aussi utiliser la **recherche personnalisée** 🔍",
-            color=discord.Color.blue()
-        )
-        await interaction.response.edit_message(embed=embed, view=view)
     
     @discord.ui.button(label="❌ Annuler", style=discord.ButtonStyle.danger)
-    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="✅ Recherche annulée !", embed=None, view=None)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="✅ Annulé!", embed=None, view=None)
 
-class RefreshView(discord.ui.View):
-    def __init__(self, query: str, category: str):
-        super().__init__(timeout=180)
-        self.query = query
+class TagSelect(discord.ui.Select):
+    def __init__(self, category: str, tags: list):
         self.category = category
+        options = [
+            discord.SelectOption(label=tag.title(), value=tag)
+            for tag in tags[:25]  # Max 25 options
+        ]
+        super().__init__(placeholder="✨ Choisis un style...", options=options)
     
-    @discord.ui.button(label="🔄 Autre image", style=discord.ButtonStyle.primary, emoji="🔄")
-    async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        logger.info(f"🔄 Rafraîchissement demandé par {interaction.user} pour '{self.query}'")
+    async def callback(self, interaction: discord.Interaction):
+        tag = self.values[0]
+        logger.info(f"🎯 {tag} par {interaction.user}")
         
         await interaction.response.edit_message(
-            content=f"📌 Recherche d'une nouvelle image...",
+            content=f"📌 Chargement...",
             embed=None,
             view=None
         )
         
-        images = await search_pinterest(self.query)
+        image_url = await get_image(self.category, tag)
         
-        if images:
-            image_url = random.choice(images)
-            embed = discord.Embed(
-                title=f"📸 {self.query.title()}",
-                description=f"Catégorie: {self.category}",
-                color=discord.Color.red()
-            )
-            embed.set_image(url=image_url)
-            embed.set_footer(text="📌 Source: Pinterest")
-            embed.add_field(
-                name="🔗 Lien direct",
-                value=f"[Voir l'image]({image_url})",
-                inline=False
-            )
-            
-            await interaction.edit_original_response(content=None, embed=embed, view=self)
+        if image_url:
+            embed = create_embed(tag.title(), image_url, self.category)
+            view = RefreshView(self.category, tag)
+            await interaction.edit_original_response(content=None, embed=embed, view=view)
         else:
-            await interaction.edit_original_response(
-                content=f"❌ Aucune image trouvée",
-                embed=None,
-                view=None
-            )
+            await interaction.edit_original_response(content=f"❌ Erreur")
+
+class TagView(discord.ui.View):
+    def __init__(self, category: str, tags: list):
+        super().__init__(timeout=180)
+        self.category = category
+        self.tags = tags
+        self.add_item(TagSelect(category, tags))
     
-    @discord.ui.button(label="⬅️ Menu principal", style=discord.ButtonStyle.secondary)
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = CategoryView()
+    @discord.ui.button(label="⬅️ Retour", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
-            title="🎨 Recherche de Photo de Profil",
-            description=f"**{len(CATEGORIES)} catégories** disponibles avec **200+ styles** !\n\n"
-                        f"Tu peux aussi utiliser la **recherche personnalisée** 🔍",
+            title="🎨 Recherche Photo de Profil",
+            description=f"**{len(CATEGORIES)}** catégories disponibles!",
             color=discord.Color.blue()
         )
-        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.response.edit_message(embed=embed, view=CategoryView())
+    
+    @discord.ui.button(label="🎲 Aléatoire", style=discord.ButtonStyle.success, row=1)
+    async def random_tag(self, interaction: discord.Interaction, button: discord.ui.Button):
+        tag = random.choice(self.tags)
+        
+        await interaction.response.edit_message(
+            content=f"📌 Chargement...",
+            embed=None,
+            view=None
+        )
+        
+        image_url = await get_image(self.category, tag)
+        
+        if image_url:
+            embed = create_embed(tag.title(), image_url, self.category)
+            view = RefreshView(self.category, tag)
+            await interaction.edit_original_response(content=None, embed=embed, view=view)
+
+class RefreshView(discord.ui.View):
+    def __init__(self, category: str, tag: str):
+        super().__init__(timeout=180)
+        self.category = category
+        self.tag = tag
+    
+    @discord.ui.button(label="🔄 Autre", style=discord.ButtonStyle.primary)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="📌 Nouvelle image...", embed=None, view=None)
+        
+        image_url = await get_image(self.category, self.tag)
+        
+        if image_url:
+            embed = create_embed(self.tag.title(), image_url, self.category)
+            await interaction.edit_original_response(embed=embed, view=self)
+    
+    @discord.ui.button(label="⬅️ Menu", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="🎨 Recherche Photo de Profil",
+            description=f"**{len(CATEGORIES)}** catégories!",
+            color=discord.Color.blue()
+        )
+        await interaction.response.edit_message(embed=embed, view=CategoryView())
 
 # ========================================
-# COMMANDES DU BOT (INCHANGÉES)
+# COMMANDES
 # ========================================
-
 @bot.event
 async def on_ready():
-    logger.info(f'✅ {bot.user} est connecté à Discord !')
-    logger.info(f'📊 Serveurs: {len(bot.guilds)}')
-    logger.info(f'🎨 Catégories disponibles: {len(CATEGORIES)}')
-    total_styles = sum(len(styles) for styles in CATEGORIES.values())
-    logger.info(f'✨ Total de styles: {total_styles}')
-    logger.info('📌 Mode: Pinterest scraping (Optimisé)')
-    logger.info('🌐 Serveur web Flask actif sur port 8080')
+    logger.info(f'✅ {bot.user} connecté!')
+    logger.info(f'📊 {len(bot.guilds)} serveurs')
+    logger.info(f'🎨 {len(CATEGORIES)} catégories')
     logger.info('━' * 50)
 
 @bot.command(name='pdp')
 async def search_pfp(ctx):
-    """Commande principale pour rechercher des photos de profil"""
-    logger.info(f"📋 Commande !pdp utilisée par {ctx.author} dans #{ctx.channel}")
-    
-    view = CategoryView()
+    """Commande principale"""
     embed = discord.Embed(
-        title="🎨 Recherche de Photo de Profil Pinterest",
-        description=f"**{len(CATEGORIES)} catégories** disponibles avec **200+ styles** !\n\n"
-                    f"**Utilise le menu déroulant** pour choisir une catégorie\n"
-                    f"**Ou clique sur 🔍 Recherche personnalisée** pour taper ce que tu veux !\n\n"
-                    f"**Quelques catégories populaires:**\n"
-                    f"• Aesthetic, Anime, Dark, Cute\n"
-                    f"• Gaming, Grunge, Y2K, Sigma\n"
-                    f"• Baddie, Kawaii, Indie, Edgy\n"
-                    f"• Et 25 autres catégories...",
+        title="🎨 Recherche Photo de Profil",
+        description=f"**{len(CATEGORIES)} catégories** disponibles!\n\n"
+                    "**APIs utilisées:**\n"
+                    "• Waifu.pics (30+ tags anime)\n"
+                    "• Nekos.best (Haute qualité)\n"
+                    "• Waifu.im (Grande collection)",
         color=discord.Color.red()
     )
-    embed.set_footer(text="📌 Utilise les menus ci-dessous 👇")
-    await ctx.send(embed=embed, view=view)
+    embed.set_footer(text="Menu ci-dessous 👇")
+    await ctx.send(embed=embed, view=CategoryView())
 
-@bot.command(name='recherche')
-async def quick_search(ctx, *, query: str):
-    """Recherche rapide sans menu"""
-    logger.info(f"🔍 Commande !recherche utilisée par {ctx.author}: '{query}'")
+@bot.command(name='random')
+async def random_image(ctx, category: str = None):
+    """Image aléatoire"""
+    if not category or category not in CATEGORIES:
+        cats = ", ".join(CATEGORIES.keys())
+        await ctx.send(f"❌ Catégories: {cats}")
+        return
     
-    msg = await ctx.send(f"📌 Recherche Pinterest pour **{query}**...")
+    tags = CATEGORIES[category]['tags']
+    tag = random.choice(tags)
+    msg = await ctx.send(f"📌 Chargement...")
     
-    images = await search_pinterest(query)
+    image_url = await get_image(category, tag)
     
-    if images:
-        image_url = random.choice(images)
-        embed = discord.Embed(
-            title=f"📸 {query.title()}",
-            description="Recherche rapide Pinterest",
-            color=discord.Color.red()
-        )
-        embed.set_image(url=image_url)
-        embed.set_footer(text="📌 Source: Pinterest")
-        embed.add_field(
-            name="🔗 Lien direct",
-            value=f"[Voir l'image]({image_url})",
-            inline=False
-        )
-        
-        view = RefreshView(query, "Recherche rapide")
+    if image_url:
+        embed = create_embed(tag.title(), image_url, category)
+        view = RefreshView(category, tag)
         await msg.edit(content=None, embed=embed, view=view)
     else:
-        await msg.edit(content=f"❌ Aucune image trouvée pour **{query}**")
+        await msg.edit(content="❌ Erreur")
 
-@bot.command(name='categories')
-async def list_categories(ctx):
-    """Liste toutes les catégories disponibles"""
-    logger.info(f"📋 Commande !categories utilisée par {ctx.author}")
-    
-    embed = discord.Embed(
-        title=f"📋 Toutes les Catégories ({len(CATEGORIES)})",
-        description="Voici toutes les catégories et styles disponibles:",
-        color=discord.Color.gold()
-    )
-    
-    categories_list = list(CATEGORIES.items())
-    for i in range(0, len(categories_list), 10):
-        chunk = categories_list[i:i+10]
-        field_value = ""
-        for category, subcats in chunk:
-            styles = ", ".join(subcats[:3])
-            if len(subcats) > 3:
-                styles += f"... (+{len(subcats)-3})"
-            field_value += f"**{category}**: {styles}\n"
-        
-        if field_value:
-            embed.add_field(name=f"Page {i//10 + 1}", value=field_value, inline=False)
-    
-    total_styles = sum(len(styles) for styles in CATEGORIES.values())
-    embed.set_footer(text=f"Total: {len(CATEGORIES)} catégories • {total_styles} styles")
-    
-    await ctx.send(embed=embed)
+@bot.command(name='ping')
+async def ping(ctx):
+    """Test de latence"""
+    latency = round(bot.latency * 1000)
+    await ctx.send(f'🏓 Pong! Latence: {latency}ms')
 
 @bot.command(name='aide')
 async def help_cmd(ctx):
-    """Affiche l'aide"""
-    logger.info(f"📚 Commande !aide utilisée par {ctx.author}")
-    
-    embed = discord.Embed(
-        title="📚 Aide - Bot Photo de Profil Pinterest",
-        description="Voici comment utiliser le bot:",
-        color=discord.Color.green()
-    )
-    
+    """Aide"""
+    embed = discord.Embed(title="📚 Aide", color=discord.Color.green())
+    embed.add_field(name="!pdp", value="🎨 Recherche interactive", inline=False)
+    embed.add_field(name="!random <catégorie>", value="🎲 Image aléatoire", inline=False)
+    embed.add_field(name="!ping", value="🏓 Test latence", inline=False)
     embed.add_field(
-        name="!pdp",
-        value="🎨 Lance la recherche interactive",
+        name="Catégories",
+        value="\n".join([f"• {c}" for c in CATEGORIES.keys()]),
         inline=False
     )
-    embed.add_field(
-        name="!recherche <mots-clés>",
-        value="🔍 Recherche rapide directe",
-        inline=False
-    )
-    embed.add_field(
-        name="!categories",
-        value="📋 Affiche toutes les catégories",
-        inline=False
-    )
-    embed.add_field(
-        name="⚠️ Note",
-        value="Ce bot utilise Pinterest. Les résultats peuvent parfois être limités.",
-        inline=False
-    )
-    
     await ctx.send(embed=embed)
 
-# 🚀 LANCEMENT DU BOT ET DU SERVEUR WEB 
+# ========================================
+# LANCEMENT
+# ========================================
 if __name__ == '__main__':
     if not DISCORD_TOKEN:
-        logger.error("❌ ERREUR CRITIQUE: DISCORD_TOKEN manquant dans les variables d'environnement !")
-    else:
-        logger.info("🚀 Démarrage du bot Pinterest avec logging amélioré...")
-        
-        # 1. Lancer le serveur web simple (non Gunicorn) dans un thread séparé.
-        Thread(target=run_flask, daemon=True).start()
-        
-        # 2. Lancer le bot Discord dans le thread principal.
-        try:
-            bot.run(DISCORD_TOKEN)
-        except Exception as e:
-            logger.critical(f"❌ ERREUR LORS DU LANCEMENT DE DISCORD: {e}")
-            sys.exit(1)
+        logger.error("❌ DISCORD_TOKEN manquant!")
+        sys.exit(1)
+    
+    logger.info("🚀 Démarrage du bot...")
+    
+    # Lancer Flask en arrière-plan
+    Thread(target=run_flask, daemon=True).start()
+    
+    # Lancer le bot Discord
+    try:
+        bot.run(DISCORD_TOKEN)
+    except Exception as e:
+        logger.critical(f"❌ Erreur: {e}")
+        sys.exit(1)
