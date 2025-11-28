@@ -31,34 +31,30 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 http_session = None
 
-# Statistiques utilisateur (en mémoire)
+# Stats
 user_stats = {}
 
-# Salon de destination pour les images sélectionnées
-destination_channel_id = None
-
 # ========================================
-# FLASK (KEEP ALIVE)
+# FLASK
 # ========================================
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "✅ Bot Discord actif!"
+    return "✅ Bot actif!"
 
 @app.route('/health')
 def health():
-    return {"status": "alive", "bot": str(bot.user) if bot.user else "Starting..."}
+    return {"status": "alive"}
 
 def run_flask():
-    logger.info("🌐 Flask sur port 8080...")
     try:
         app.run(host='0.0.0.0', port=8080, use_reloader=False)
     except Exception as e:
-        logger.error(f"❌ Flask erreur: {e}")
+        logger.error(f"❌ Flask: {e}")
 
 # ========================================
-# CATÉGORIES MASSIVES
+# CATÉGORIES MASSIVES - TOUT POSSIBLE
 # ========================================
 CATEGORIES = {
     "😎 Anime": {
@@ -70,39 +66,60 @@ CATEGORIES = {
     },
     "😺 Nekos": {
         "api": "nekos.best",
-        "tags": ["neko", "kitsune", "waifu", "husbando"]
+        "tags": ["neko", "kitsune", "waifu", "husbando", "neko", "kitsune"]
     },
     "✨ Waifu": {
         "api": "waifu.im",
-        "tags": ["waifu", "maid", "marin-kitagawa", "raiden-shogun", "selfies", "uniform"]
+        "tags": ["waifu", "maid", "marin-kitagawa", "raiden-shogun", "selfies", "uniform",
+                 "waifu", "maid", "uniform", "oppai", "ero", "selfies", "ass"]
     },
     "🎮 Gaming": {
         "api": "waifu.pics",
-        "tags": ["neko", "waifu", "shinobu", "megumin", "smile", "happy", "dance"]
+        "tags": ["neko", "waifu", "shinobu", "megumin", "smile", "happy", "dance", "highfive", "pat"]
     },
     "💖 Kawaii": {
         "api": "nekos.best",
-        "tags": ["neko", "kitsune", "waifu"]
+        "tags": ["neko", "kitsune", "waifu", "husbando", "neko"]
     },
     "🔥 Action": {
         "api": "waifu.pics",
-        "tags": ["bonk", "yeet", "bully", "slap", "kill", "kick"]
+        "tags": ["bonk", "yeet", "bully", "slap", "kill", "kick", "bite", "glomp", "bully"]
     },
     "💕 Romance": {
         "api": "waifu.pics",
-        "tags": ["cuddle", "hug", "kiss", "pat", "handhold", "smile", "blush"]
+        "tags": ["cuddle", "hug", "kiss", "pat", "handhold", "smile", "blush", "nom", "lick"]
     },
     "😹 Drôle": {
         "api": "waifu.pics",
-        "tags": ["smug", "dance", "cringe", "nom", "poke", "wave", "wink"]
+        "tags": ["smug", "dance", "cringe", "nom", "poke", "wave", "wink", "yeet", "bonk"]
     },
     "🌸 Cute": {
         "api": "waifu.pics",
-        "tags": ["awoo", "neko", "waifu", "pat", "cuddle", "smile"]
+        "tags": ["awoo", "neko", "waifu", "pat", "cuddle", "smile", "blush", "happy"]
     },
     "⚔️ Combattant": {
         "api": "waifu.im",
-        "tags": ["waifu", "uniform", "maid"]
+        "tags": ["waifu", "uniform", "maid", "waifu"]
+    },
+    "🎭 Expression": {
+        "api": "waifu.pics",
+        "tags": ["smile", "happy", "cry", "blush", "smug", "wink", "cringe"]
+    },
+    "👫 Social": {
+        "api": "waifu.pics",
+        "tags": ["hug", "kiss", "pat", "cuddle", "handhold", "wave", "highfive"]
+    },
+    "😈 Troll": {
+        "api": "waifu.pics",
+        "tags": ["bully", "bonk", "slap", "kick", "kill", "yeet", "smug"]
+    },
+    "🌟 Popular": {
+        "api": "waifu.pics",
+        "tags": ["waifu", "neko", "shinobu", "megumin", "smile", "pat"]
+    },
+    "🎨 Artistique": {
+        "api": "waifu.im",
+        "tags": ["waifu", "maid", "uniform", "selfies"]
     }
 }
 
@@ -127,7 +144,7 @@ async def fetch_waifu_pics(tag: str) -> str:
                 data = await response.json()
                 return data.get('url')
     except Exception as e:
-        logger.error(f"❌ Waifu.pics ({tag}): {e}")
+        logger.error(f"❌ Waifu.pics: {e}")
     return None
 
 async def fetch_nekos_best(tag: str) -> str:
@@ -139,7 +156,7 @@ async def fetch_nekos_best(tag: str) -> str:
                 data = await response.json()
                 return data['results'][0]['url']
     except Exception as e:
-        logger.error(f"❌ Nekos.best ({tag}): {e}")
+        logger.error(f"❌ Nekos.best: {e}")
     return None
 
 async def fetch_waifu_im(tag: str) -> str:
@@ -153,7 +170,7 @@ async def fetch_waifu_im(tag: str) -> str:
                 if data.get('images'):
                     return data['images'][0]['url']
     except Exception as e:
-        logger.error(f"❌ Waifu.im ({tag}): {e}")
+        logger.error(f"❌ Waifu.im: {e}")
     return None
 
 async def get_image(category: str, tag: str, retry: int = 2) -> str:
@@ -183,171 +200,174 @@ async def get_image(category: str, tag: str, retry: int = 2) -> str:
     return None
 
 # ========================================
-# STATS UTILISATEUR
+# STATS
 # ========================================
 def track_user_request(user_id: int, category: str):
     if user_id not in user_stats:
-        user_stats[user_id] = {
-            'total': 0,
-            'categories': {},
-            'favorites': [],
-            'last_used': None
-        }
-    
+        user_stats[user_id] = {'total': 0, 'categories': {}}
     user_stats[user_id]['total'] += 1
-    user_stats[user_id]['last_used'] = datetime.now()
-    
     if category not in user_stats[user_id]['categories']:
         user_stats[user_id]['categories'][category] = 0
     user_stats[user_id]['categories'][category] += 1
 
-def add_favorite(user_id: int, image_url: str, category: str, tag: str):
-    if user_id not in user_stats:
-        user_stats[user_id] = {'favorites': []}
-    
-    fav = {
-        'url': image_url,
-        'category': category,
-        'tag': tag,
-        'added': datetime.now()
-    }
-    
-    user_stats[user_id].setdefault('favorites', []).append(fav)
-    
-    if len(user_stats[user_id]['favorites']) > 20:
-        user_stats[user_id]['favorites'].pop(0)
-
 # ========================================
-# VUES DISCORD
+# VUE SÉLECTION SALON
 # ========================================
-class ImageSelectionView(discord.ui.View):
-    def __init__(self, images: list, category: str, tag: str, ctx):
-        super().__init__(timeout=600)  # 10 minutes
+class ChannelSelectView(discord.ui.View):
+    def __init__(self, images: list, category: str, tag: str, user, guild):
+        super().__init__(timeout=300)
         self.images = images
         self.category = category
         self.tag = tag
-        self.ctx = ctx
+        self.user = user
+        self.guild = guild
+        self.selected_channel = None
+        
+        # Créer le menu déroulant avec les salons
+        options = []
+        for channel in guild.text_channels[:25]:  # Max 25
+            options.append(
+                discord.SelectOption(
+                    label=f"#{channel.name}",
+                    value=str(channel.id),
+                    description=f"Envoyer dans {channel.name}"
+                )
+            )
+        
+        if options:
+            select = discord.ui.Select(
+                placeholder="📌 Choisis le salon où envoyer les images...",
+                options=options
+            )
+            select.callback = self.channel_selected
+            self.add_item(select)
+    
+    async def channel_selected(self, interaction: discord.Interaction):
+        channel_id = int(interaction.data['values'][0])
+        channel = self.guild.get_channel(channel_id)
+        
+        if not channel:
+            await interaction.response.send_message("❌ Salon introuvable!", ephemeral=True)
+            return
+        
+        await interaction.response.edit_message(
+            content=f"📤 Envoi de **{len(self.images)} images** vers {channel.mention}...",
+            view=None
+        )
+        
+        # Envoyer les images SANS embed, juste les URLs
+        for img_url in self.images:
+            await channel.send(img_url)
+        
+        # Message de confirmation
+        await channel.send(f"✅ **{len(self.images)} images** envoyées par {self.user.mention}!")
+        
+        await interaction.followup.send(
+            f"✅ {len(self.images)} images envoyées dans {channel.mention}!",
+            ephemeral=True
+        )
+
+# ========================================
+# VUE SÉLECTION D'IMAGES
+# ========================================
+class ImageSelectionView(discord.ui.View):
+    def __init__(self, images: list, category: str, tag: str, user, guild):
+        super().__init__(timeout=600)
+        self.images = images
+        self.category = category
+        self.tag = tag
+        self.user = user
+        self.guild = guild
         self.selected_images = []
         
-        # Ajouter des boutons pour chaque image (max 25)
-        for i, img_url in enumerate(images[:10], 1):
+        # Boutons pour chaque image
+        for i in range(min(len(images), 10)):
             button = discord.ui.Button(
-                label=f"#{i}",
+                label=f"#{i+1}",
                 style=discord.ButtonStyle.secondary,
                 custom_id=f"img_{i}",
-                row=i // 5  # 5 boutons par ligne
+                row=i // 5
             )
-            button.callback = self.create_callback(i - 1, img_url)
+            button.callback = self.create_callback(i)
             self.add_item(button)
         
-        # Bouton pour envoyer les sélectionnées
-        send_btn = discord.ui.Button(
-            label="✅ Envoyer Sélection",
-            style=discord.ButtonStyle.success,
-            custom_id="send_selected",
-            row=2
-        )
-        send_btn.callback = self.send_selected
-        self.add_item(send_btn)
-        
-        # Bouton pour tout sélectionner
+        # Bouton tout sélectionner
         all_btn = discord.ui.Button(
-            label="📌 Tout Sélectionner",
+            label="📌 Tout",
             style=discord.ButtonStyle.primary,
             custom_id="select_all",
             row=2
         )
         all_btn.callback = self.select_all
         self.add_item(all_btn)
+        
+        # Bouton envoyer
+        send_btn = discord.ui.Button(
+            label="✅ Envoyer",
+            style=discord.ButtonStyle.success,
+            custom_id="send",
+            row=2
+        )
+        send_btn.callback = self.send_images
+        self.add_item(send_btn)
     
-    def create_callback(self, index: int, img_url: str):
+    def create_callback(self, index: int):
         async def callback(interaction: discord.Interaction):
-            # Trouver le bouton
             button = None
             for item in self.children:
-                if isinstance(item, discord.ui.Button) and item.custom_id == f"img_{index + 1}":
+                if isinstance(item, discord.ui.Button) and item.custom_id == f"img_{index}":
                     button = item
                     break
             
             if button:
                 if index in self.selected_images:
-                    # Désélectionner
                     self.selected_images.remove(index)
                     button.style = discord.ButtonStyle.secondary
                     button.label = f"#{index + 1}"
                 else:
-                    # Sélectionner
                     self.selected_images.append(index)
                     button.style = discord.ButtonStyle.success
                     button.label = f"✅ #{index + 1}"
                 
                 await interaction.response.edit_message(view=self)
-        
         return callback
     
     async def select_all(self, interaction: discord.Interaction):
         self.selected_images = list(range(len(self.images)))
-        
-        # Mettre à jour tous les boutons
         for item in self.children:
             if isinstance(item, discord.ui.Button) and item.custom_id and item.custom_id.startswith("img_"):
                 item.style = discord.ButtonStyle.success
                 item.label = "✅ " + item.label.replace("✅ ", "")
-        
         await interaction.response.edit_message(
             content=f"✅ **{len(self.selected_images)} images** sélectionnées!",
             view=self
         )
     
-    async def send_selected(self, interaction: discord.Interaction):
-        global destination_channel_id
-        
+    async def send_images(self, interaction: discord.Interaction):
         if not self.selected_images:
             await interaction.response.send_message(
-                "❌ Aucune image sélectionnée! Clique sur les numéros pour sélectionner.",
+                "❌ Sélectionne au moins une image!",
                 ephemeral=True
             )
             return
         
-        # Vérifier si un salon de destination est défini
-        if not destination_channel_id:
-            await interaction.response.send_message(
-                "❌ Aucun salon configuré! Utilise `!setsalon #salon` d'abord.",
-                ephemeral=True
-            )
-            return
+        # Récupérer les images sélectionnées
+        selected = [self.images[i] for i in self.selected_images]
         
-        channel = bot.get_channel(destination_channel_id)
-        if not channel:
-            await interaction.response.send_message(
-                "❌ Salon introuvable! Utilise `!setsalon #salon` pour en définir un.",
-                ephemeral=True
-            )
-            return
+        # Afficher le menu de sélection de salon
+        view = ChannelSelectView(selected, self.category, self.tag, self.user, self.guild)
         
-        await interaction.response.send_message(
-            f"📤 Envoi de **{len(self.selected_images)} images** vers {channel.mention}...",
-            ephemeral=True
-        )
-        
-        # Envoyer les images sélectionnées
-        for idx in self.selected_images:
-            img_url = self.images[idx]
-            embed = discord.Embed(
-                title=f"📸 {self.tag.title()} - Image #{idx + 1}",
-                description=f"**Catégorie:** {self.category}\n**Tag:** `{self.tag}`",
-                color=discord.Color.random()
-            )
-            embed.set_image(url=img_url)
-            embed.set_footer(text=f"Envoyé par {interaction.user.name}")
-            
-            await channel.send(embed=embed)
-        
-        # Message de confirmation
-        await channel.send(
-            f"✅ **{len(self.selected_images)} images** envoyées par {interaction.user.mention}!"
+        await interaction.response.edit_message(
+            content=f"📌 **{len(selected)} images** sélectionnées!\n\n"
+                   f"👇 Choisis maintenant le salon où les envoyer:",
+            embeds=[],
+            view=view
         )
 
+# SUITE DANS PARTIE 2...
+# ========================================
+# VUES DISCORD - MENUS
+# ========================================
 class CategorySelect(discord.ui.Select):
     def __init__(self):
         options = [
@@ -363,14 +383,11 @@ class CategorySelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         selected = self.values[0]
         tags = CATEGORIES[selected]['tags']
-        
         track_user_request(interaction.user.id, selected)
-        
-        view = TagView(selected, tags, interaction.user.id, interaction)
+        view = TagView(selected, tags, interaction.user, interaction.guild)
         embed = discord.Embed(
             title=f"{selected}",
-            description=f"**{len(tags)}** styles disponibles !\n\n"
-                       f"Sélectionne un style.",
+            description=f"**{len(tags)}** styles disponibles!",
             color=discord.Color.purple()
         )
         await interaction.response.edit_message(embed=embed, view=view)
@@ -382,13 +399,13 @@ class CategoryView(discord.ui.View):
     
     @discord.ui.button(label="❌ Annuler", style=discord.ButtonStyle.danger)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="✅ Recherche annulée!", embed=None, view=None)
+        await interaction.response.edit_message(content="✅ Annulé!", embed=None, view=None)
 
 class TagSelect(discord.ui.Select):
-    def __init__(self, category: str, tags: list, user_id: int, original_interaction):
+    def __init__(self, category: str, tags: list, user, guild):
         self.category = category
-        self.user_id = user_id
-        self.original_interaction = original_interaction
+        self.user = user
+        self.guild = guild
         options = [
             discord.SelectOption(label=tag.title(), value=tag)
             for tag in tags[:25]
@@ -397,14 +414,12 @@ class TagSelect(discord.ui.Select):
     
     async def callback(self, interaction: discord.Interaction):
         tag = self.values[0]
-        
         await interaction.response.edit_message(
             content=f"⏳ Chargement de 10 images **{tag}**...",
             embed=None,
             view=None
         )
         
-        # Charger 10 images
         images = []
         for _ in range(10):
             img_url = await get_image(self.category, tag)
@@ -412,47 +427,30 @@ class TagSelect(discord.ui.Select):
                 images.append(img_url)
         
         if images:
-            # Créer un message avec toutes les images
-            message_content = f"📚 **10 Images - {tag.title()}**\n\n"
-            
-            # Créer les embeds pour afficher les images
             embeds = []
-            for i, img_url in enumerate(images[:10], 1):
-                embed = discord.Embed(
-                    title=f"Image #{i}",
-                    color=discord.Color.random()
-                )
+            for i, img_url in enumerate(images, 1):
+                embed = discord.Embed(title=f"#{i}", color=discord.Color.random())
                 embed.set_image(url=img_url)
                 embeds.append(embed)
             
-            # Discord permet max 10 embeds par message
-            view = ImageSelectionView(images, self.category, tag, interaction)
-            
+            view = ImageSelectionView(images, self.category, tag, self.user, self.guild)
             await interaction.edit_original_response(
-                content=f"📚 **{len(images)} images de {tag.title()}**\n\n"
-                       f"👇 Clique sur les numéros pour sélectionner les images à envoyer!\n"
-                       f"Puis clique sur **✅ Envoyer Sélection**",
+                content=f"📚 **{len(images)} images de {tag.title()}**\n"
+                       f"👇 Sélectionne celles que tu veux!",
                 embeds=embeds[:10],
                 view=view
             )
-        else:
-            await interaction.edit_original_response(
-                content=f"❌ Impossible de charger les images"
-            )
 
 class TagView(discord.ui.View):
-    def __init__(self, category: str, tags: list, user_id: int, original_interaction):
+    def __init__(self, category: str, tags: list, user, guild):
         super().__init__(timeout=300)
-        self.category = category
-        self.tags = tags
-        self.user_id = user_id
-        self.add_item(TagSelect(category, tags, user_id, original_interaction))
+        self.add_item(TagSelect(category, tags, user, guild))
     
-    @discord.ui.button(label="⬅️ Retour", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="⬅️ Retour", style=discord.ButtonStyle.secondary)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
-            title="🎨 Recherche Photo de Profil",
-            description=f"**{len(CATEGORIES)}** catégories disponibles!",
+            title="🎨 Recherche PFP",
+            description=f"**{len(CATEGORIES)}** catégories!",
             color=discord.Color.blue()
         )
         await interaction.response.edit_message(embed=embed, view=CategoryView())
@@ -466,95 +464,51 @@ async def on_ready():
     logger.info(f'📊 {len(bot.guilds)} serveurs')
     logger.info(f'🎨 {len(CATEGORIES)} catégories')
     total_tags = sum(len(cat['tags']) for cat in CATEGORIES.values())
-    logger.info(f'🏷️ {total_tags} tags disponibles')
+    logger.info(f'🏷️ {total_tags} tags')
     logger.info('━' * 50)
-
-@bot.command(name='setsalon')
-@commands.has_permissions(administrator=True)
-async def set_destination_channel(ctx, channel: discord.TextChannel):
-    """Définit le salon où envoyer les images sélectionnées (Admin uniquement)"""
-    global destination_channel_id
-    destination_channel_id = channel.id
-    
-    embed = discord.Embed(
-        title="✅ Salon Configuré!",
-        description=f"Les images sélectionnées seront envoyées dans {channel.mention}",
-        color=discord.Color.green()
-    )
-    await ctx.send(embed=embed)
 
 @bot.command(name='pdp')
 async def search_pfp(ctx):
-    """Recherche interactive de 10 PFP à sélectionner"""
-    global destination_channel_id
-    
+    """Menu interactif avec 10 images"""
     embed = discord.Embed(
         title="🎨 Recherche Photo de Profil",
-        description=f"**{len(CATEGORIES)} catégories** avec des centaines de styles!\n\n"
+        description=f"**{len(CATEGORIES)} catégories** disponibles!\n\n"
                     "**Comment ça marche:**\n"
                     "1️⃣ Choisis une catégorie\n"
                     "2️⃣ Choisis un style\n"
-                    "3️⃣ **10 images** apparaissent\n"
-                    "4️⃣ Clique sur les numéros pour sélectionner\n"
-                    "5️⃣ Clique **✅ Envoyer Sélection**\n\n",
+                    "3️⃣ 10 images apparaissent\n"
+                    "4️⃣ Sélectionne celles que tu veux\n"
+                    "5️⃣ Choisis le salon où envoyer\n"
+                    "6️⃣ Les images sont envoyées!",
         color=discord.Color.red()
     )
-    
-    if destination_channel_id:
-        channel = bot.get_channel(destination_channel_id)
-        if channel:
-            embed.add_field(
-                name="📌 Salon configuré",
-                value=f"Les images seront envoyées dans {channel.mention}",
-                inline=False
-            )
-    else:
-        embed.add_field(
-            name="⚠️ Aucun salon configuré",
-            value="Un admin doit utiliser `!setsalon #salon` d'abord!",
-            inline=False
-        )
-    
-    embed.set_footer(text=f"Demandé par {ctx.author.name}")
     await ctx.send(embed=embed, view=CategoryView())
 
 @bot.command(name='recherche')
-async def search_images_cmd(ctx, *, query: str):
-    """Recherche 10 images par mot-clé avec sélection"""
-    global destination_channel_id
+async def search_cmd(ctx, *, query: str):
+    """Recherche 10 images par mot-clé"""
+    msg = await ctx.send(f"🔍 Recherche **{query}**...")
     
-    if not destination_channel_id:
-        await ctx.send("❌ Configure d'abord un salon avec `!setsalon #salon` (admin requis)")
-        return
-    
-    msg = await ctx.send(f"🔍 Recherche de 10 images **{query}**...")
-    
-    # Trouver les tags qui correspondent
-    matching_tags = []
+    matching = []
     for category, data in CATEGORIES.items():
         for tag in data['tags']:
             if query.lower() in tag.lower():
-                matching_tags.append((category, tag))
+                matching.append((category, tag))
     
-    # Si pas de correspondance exacte, chercher dans les catégories
-    if not matching_tags:
+    if not matching:
         for category in CATEGORIES.keys():
             if query.lower() in category.lower():
                 tags = CATEGORIES[category]['tags']
-                selected_tag = random.choice(tags)
-                matching_tags = [(category, selected_tag)]
+                matching = [(category, random.choice(tags))]
                 break
     
-    if not matching_tags:
-        await msg.edit(content=f"❌ Aucun résultat pour **{query}**. Essaye: waifu, neko, cute, anime...")
+    if not matching:
+        await msg.edit(content=f"❌ Aucun résultat pour **{query}**")
         return
     
-    # Prendre un tag au hasard parmi les correspondances
-    category, tag = random.choice(matching_tags)
-    
+    category, tag = random.choice(matching)
     track_user_request(ctx.author.id, category)
     
-    # Charger 10 images
     images = []
     for _ in range(10):
         img_url = await get_image(category, tag)
@@ -564,49 +518,27 @@ async def search_images_cmd(ctx, *, query: str):
     if images:
         embeds = []
         for i, img_url in enumerate(images, 1):
-            embed = discord.Embed(
-                title=f"Image #{i}",
-                color=discord.Color.random()
-            )
+            embed = discord.Embed(title=f"#{i}", color=discord.Color.random())
             embed.set_image(url=img_url)
             embeds.append(embed)
         
-        view = ImageSelectionView(images, category, tag, ctx)
-        
+        view = ImageSelectionView(images, category, tag, ctx.author, ctx.guild)
         await msg.edit(
-            content=f"🔍 **{len(images)} images trouvées pour '{query}'**\n"
-                   f"📂 Catégorie: {category} | 🏷️ Tag: {tag}\n\n"
-                   f"👇 Clique sur les numéros pour sélectionner!\n"
-                   f"Puis clique sur **✅ Envoyer Sélection**",
+            content=f"🔍 **{len(images)} images** trouvées pour **{query}**!\n"
+                   f"👇 Sélectionne celles que tu veux!",
             embeds=embeds[:10],
             view=view
         )
-    else:
-        await msg.edit(content=f"❌ Impossible de charger des images pour **{query}**")
 
 @bot.command(name='batch')
-async def batch_images(ctx, count: int = 10, *, category: str = None):
-    """Génère plusieurs images d'un coup avec sélection"""
-    global destination_channel_id
-    
-    if not destination_channel_id:
-        await ctx.send("❌ Configure d'abord un salon avec `!setsalon #salon` (admin requis)")
-        return
-    
-    count = min(max(count, 1), 10)  # Limité à 10 pour l'affichage
-    
-    if not category:
-        category = random.choice(list(CATEGORIES.keys()))
-    elif category not in CATEGORIES:
-        cats = ", ".join(f"`{c}`" for c in list(CATEGORIES.keys())[:5])
-        await ctx.send(f"❌ Catégories valides: {cats}...")
-        return
-    
+async def batch_cmd(ctx, count: int = 10):
+    """Génère 10 images random"""
+    count = min(max(count, 1), 10)
+    category = random.choice(list(CATEGORIES.keys()))
     tags = CATEGORIES[category]['tags']
     tag = random.choice(tags)
     
-    msg = await ctx.send(f"⏳ Chargement de **{count} images** de **{tag}**...")
-    
+    msg = await ctx.send(f"⏳ Chargement de {count} images...")
     track_user_request(ctx.author.id, category)
     
     images = []
@@ -618,108 +550,92 @@ async def batch_images(ctx, count: int = 10, *, category: str = None):
     if images:
         embeds = []
         for i, img_url in enumerate(images, 1):
-            embed = discord.Embed(
-                title=f"Image #{i}",
-                color=discord.Color.random()
-            )
+            embed = discord.Embed(title=f"#{i}", color=discord.Color.random())
             embed.set_image(url=img_url)
             embeds.append(embed)
         
-        view = ImageSelectionView(images, category, tag, ctx)
-        
+        view = ImageSelectionView(images, category, tag, ctx.author, ctx.guild)
         await msg.edit(
-            content=f"📚 **{len(images)} images de {tag.title()}**\n\n"
-                   f"👇 Clique sur les numéros pour sélectionner!\n"
-                   f"Puis clique sur **✅ Envoyer Sélection**",
+            content=f"📚 **{len(images)} images de {tag.title()}**\n"
+                   f"👇 Sélectionne celles que tu veux!",
             embeds=embeds[:10],
             view=view
         )
 
-@bot.command(name='ping')
-async def ping(ctx):
-    """Test de latence"""
-    latency = round(bot.latency * 1000)
-    color = discord.Color.green() if latency < 100 else discord.Color.orange() if latency < 200 else discord.Color.red()
-    embed = discord.Embed(
-        title="🏓 Pong!",
-        description=f"Latence: **{latency}ms**",
-        color=color
-    )
-    await ctx.send(embed=embed)
-
 @bot.command(name='aide')
 async def help_cmd(ctx):
-    """Affiche l'aide"""
+    """Aide complète avec embed"""
     embed = discord.Embed(
-        title="📚 Commandes du Bot",
+        title="📚 Aide - Bot PFP",
         description="Voici toutes les commandes disponibles:",
         color=discord.Color.green()
     )
     
     embed.add_field(
-        name="🎨 Recherche d'Images",
-        value="**!pdp** - Menu interactif avec sélection\n"
-              "**!recherche <mot>** - Cherche 10 images par mot-clé\n"
-              "**!batch [nombre] [catégorie]** - 10 images rapides\n"
-              "**!setsalon #salon** - Configure le salon (Admin)",
+        name="🎨 Commandes Principales",
+        value=(
+            "**!pdp** - Menu interactif complet\n"
+            "**!recherche <mot>** - Recherche par mot-clé\n"
+            "**!batch [nombre]** - Génère 10 images random"
+        ),
         inline=False
     )
     
     embed.add_field(
-        name="📌 Comment ça marche?",
-        value="1. Un admin fait `!setsalon #salon-images`\n"
-              "2. Tu fais `!pdp` / `!recherche` / `!batch`\n"
-              "3. 10 images apparaissent\n"
-              "4. Tu cliques sur les numéros pour sélectionner\n"
-              "5. Tu cliques **✅ Envoyer Sélection**\n"
-              "6. Les images sont envoyées dans le salon!",
+        name="📌 Comment ça fonctionne?",
+        value=(
+            "1. Lance une commande (!pdp, !recherche, !batch)\n"
+            "2. 10 images apparaissent avec des embeds\n"
+            "3. Clique sur #1, #2... pour sélectionner\n"
+            "4. Clique sur ✅ Envoyer\n"
+            "5. Choisis le salon dans le menu déroulant\n"
+            "6. Les images sont envoyées SANS embed!"
+        ),
         inline=False
     )
     
     embed.add_field(
         name="💡 Exemples",
-        value="`!recherche neko` - 10 images de neko\n"
-              "`!recherche cute` - 10 images cute\n"
-              "`!batch 10` - 10 images random",
+        value=(
+            "`!pdp` - Menu complet\n"
+            "`!recherche neko` - 10 images neko\n"
+            "`!recherche cute waifu` - Recherche avancée\n"
+            "`!batch 10` - 10 images random"
+        ),
         inline=False
     )
     
     embed.add_field(
-        name="ℹ️ Infos",
-        value="**!ping** - Latence du bot\n"
-              "**!aide** - Ce message",
+        name="🎯 Catégories disponibles",
+        value=", ".join([cat.split()[1] if len(cat.split()) > 1 else cat for cat in list(CATEGORIES.keys())[:10]]) + "...",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="ℹ️ Autres commandes",
+        value="**!ping** - Latence\n**!stats** - Statistiques",
         inline=False
     )
     
     total_tags = sum(len(cat['tags']) for cat in CATEGORIES.values())
-    embed.set_footer(text=f"{len(CATEGORIES)} catégories • {total_tags} styles")
+    embed.set_footer(text=f"✨ {len(CATEGORIES)} catégories • {total_tags} styles disponibles")
     
     await ctx.send(embed=embed)
 
+@bot.command(name='ping')
+async def ping(ctx):
+    """Latence"""
+    latency = round(bot.latency * 1000)
+    await ctx.send(f'🏓 Pong! **{latency}ms**')
+
 @bot.command(name='stats')
 async def stats_cmd(ctx):
-    """Statistiques globales du bot"""
+    """Stats globales"""
     total_tags = sum(len(cat['tags']) for cat in CATEGORIES.values())
-    total_users = len(user_stats)
-    total_requests = sum(s.get('total', 0) for s in user_stats.values())
-    
-    embed = discord.Embed(
-        title="📊 Statistiques Globales",
-        color=discord.Color.blue()
-    )
-    
+    embed = discord.Embed(title="📊 Statistiques", color=discord.Color.blue())
     embed.add_field(name="Serveurs", value=f"🖥️ {len(bot.guilds)}", inline=True)
     embed.add_field(name="Catégories", value=f"📂 {len(CATEGORIES)}", inline=True)
-    embed.add_field(name="Tags totaux", value=f"🏷️ {total_tags}", inline=True)
-    embed.add_field(name="Utilisateurs", value=f"👥 {total_users}", inline=True)
-    embed.add_field(name="Images générées", value=f"🖼️ {total_requests}", inline=True)
-    embed.add_field(name="Latence", value=f"🏓 {round(bot.latency * 1000)}ms", inline=True)
-    
-    if destination_channel_id:
-        channel = bot.get_channel(destination_channel_id)
-        if channel:
-            embed.add_field(name="Salon configuré", value=f"📌 {channel.mention}", inline=False)
-    
+    embed.add_field(name="Tags", value=f"🏷️ {total_tags}", inline=True)
     await ctx.send(embed=embed)
 
 # ========================================
@@ -730,7 +646,6 @@ async def on_disconnect():
     global http_session
     if http_session and not http_session.closed:
         await http_session.close()
-        logger.info("🔒 Session HTTP fermée")
 
 # ========================================
 # LANCEMENT
@@ -740,17 +655,11 @@ if __name__ == '__main__':
         logger.error("❌ DISCORD_TOKEN manquant!")
         sys.exit(1)
     
-    logger.info("🚀 Démarrage du bot...")
-    
+    logger.info("🚀 Démarrage...")
     Thread(target=run_flask, daemon=True).start()
     
     try:
         bot.run(DISCORD_TOKEN)
-    except KeyboardInterrupt:
-        logger.info("⚠️ Arrêt demandé")
     except Exception as e:
         logger.critical(f"❌ Erreur: {e}")
         sys.exit(1)
-    finally:
-        if http_session and not http_session.closed:
-            asyncio.run(http_session.close())
