@@ -17,10 +17,11 @@ def home():
 
 @app.route('/health')
 def health():
-    return {"status": "alive", "bot": str(bot.user) if bot.user else "starting"}
+    return {"status": "ok", "bot": "online"}
 
 def run_flask():
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 10000)))
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
 
 # Charger les variables d'environnement
 load_dotenv()
@@ -29,348 +30,286 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
 
-# Debug : Afficher si les variables sont chargées
+# Debug
 print(f"TOKEN chargé: {'Oui' if TOKEN else 'Non'}")
 print(f"DATABASE_URL chargé: {'Oui' if DATABASE_URL else 'Non'}")
 
-if not TOKEN:
-    print("❌ ERREUR: DISCORD_TOKEN introuvable dans .env")
+if not TOKEN or not DATABASE_URL:
+    print("❌ ERREUR : Variables d'environnement manquantes !")
+    print("Assurez-vous que DISCORD_TOKEN et DATABASE_URL sont définis dans .env")
     exit(1)
 
-if not DATABASE_URL:
-    print("❌ ERREUR: DATABASE_URL introuvable dans .env")
-    exit(1)
-
-# Intents
+# Configuration du bot
 intents = discord.Intents.default()
 intents.message_content = True
+intents.guilds = True
+intents.members = True
 
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # Connexion à la base de données
 def get_db_connection():
     try:
-        return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+        return conn
     except Exception as e:
-        print(f"❌ Erreur connexion BDD: {e}")
+        print(f"❌ Erreur de connexion à la base : {e}")
         return None
 
-# Categories disponibles
-CATEGORIES = {
-    'anime': 'anime_pdp',
-    'boy': 'boy_pdp',
-    'girl': 'girl_pdp',
-    'banner': 'banner',
-    'aesthetic': 'aesthetic',
-    'cute': 'cute_pdp'
-}
-
+# Événement : Bot prêt
 @bot.event
 async def on_ready():
-    print(f'✅ {bot.user} est connecté!')
-    print(f"✅ Prefix: !")
-    print(f"✅ Prêt dans {len(bot.guilds)} serveur(s)")
+    print(f'✅ {bot.user.name} est connecté!')
+    print(f'✅ Prêt dans {len(bot.guilds)} serveur(s)')
+    await bot.change_presence(activity=discord.Game(name="!help pour les commandes"))
 
+# Commande : !help
 @bot.command(name='help')
 async def help_command(ctx):
     """Affiche toutes les commandes disponibles"""
     embed = discord.Embed(
         title="🎨 Bot PFP Discord - Aide",
         description="**Commandes disponibles** (prefix: `!`)",
-        color=discord.Color.from_rgb(88, 101, 242)
+        color=0x9b59b6
     )
     
-    # Commandes principales
     embed.add_field(
-        name="**🖼️ `!pdp <catégorie>`**",
-        value="```Recherche d'avatars par catégorie\nEx: !pdp anime```\n**Catégories:** `anime`, `boy`, `girl`, `aesthetic`, `cute`",
+        name="🖼️ !pdp <catégorie>",
+        value="Envoie plusieurs photos de profil aléatoires\nEx: `!pdp anime`\nCatégories: anime, boy, girl, aesthetic, cute",
         inline=False
     )
     
     embed.add_field(
-        name="**🎭 `!banner`**",
-        value="```Obtenir un banner aléatoire pour Discord```",
+        name="🎭 !banner",
+        value="Envoie plusieurs banners aléatoires pour Discord",
         inline=False
     )
     
     embed.add_field(
-        name="**📊 `!stock`**",
-        value="```Voir le stock d'images disponibles```",
+        name="📊 !stock",
+        value="Voir le nombre d'images disponibles par catégorie",
         inline=False
     )
     
     embed.add_field(
-        name="**🏆 `!trending`**",
-        value="```Top des catégories les plus populaires```",
+        name="🔥 !trending",
+        value="Top des catégories les plus populaires",
         inline=False
     )
     
-    # Section utilitaires
     embed.add_field(
-        name="**⚙️ Utilitaires**",
+        name="⚙️ Utilitaires",
         value="`!ping` • Vérifier la latence\n`!stats` • Statistiques complètes\n`!help` • Afficher cette aide",
         inline=False
     )
     
-    # Fonctionnalités
     embed.add_field(
-        name="✨ **Fonctionnalités**",
+        name="✨ Fonctionnalités",
         value="🔍 Preview • ✂️ Crop 512x512 • 🎨 Qualité HD • 🔄 Rotation auto • 📦 Collections • 🔥 Tendances",
         inline=False
     )
     
     embed.set_footer(text="Développé avec ❤️ • Chaque image est unique - Pas de doublon !")
-    embed.set_thumbnail(url=bot.user.display_avatar.url if bot.user else None)
     
     await ctx.send(embed=embed)
 
+# Commande : !pdp <category>
 @bot.command(name='pdp')
 async def pdp(ctx, category: str = None):
-    """Obtenir une photo de profil aléatoire"""
+    """Envoie plusieurs photos de profil aléatoires"""
     
     if not category:
-        categories_list = ', '.join(CATEGORIES.keys())
-        await ctx.send(f"❌ Veuillez spécifier une catégorie!\n📁 Catégories disponibles: `{categories_list}`\n💡 Exemple: `!pdp anime`")
+        await ctx.send("❌ Veuillez spécifier une catégorie !\nEx: `!pdp anime`\nCatégories disponibles: anime, boy, girl, aesthetic, cute")
         return
     
     category = category.lower()
+    valid_categories = ['anime', 'boy', 'girl', 'aesthetic', 'cute']
     
-    if category not in CATEGORIES:
-        categories_list = ', '.join(CATEGORIES.keys())
-        await ctx.send(f"❌ Catégorie invalide!\n📁 Catégories disponibles: `{categories_list}`")
+    if category not in valid_categories:
+        await ctx.send(f"❌ Catégorie invalide ! Choisissez parmi : {', '.join(valid_categories)}")
         return
     
-    db_category = CATEGORIES[category]
-    
     try:
         conn = get_db_connection()
         if not conn:
             await ctx.send("❌ Erreur de connexion à la base de données!")
             return
-            
-        cur = conn.cursor()
         
-        # Récupérer une image aléatoire "pending"
-        cur.execute(
-            "SELECT * FROM images WHERE category = %s AND status = 'pending' ORDER BY RANDOM() LIMIT 1",
-            (db_category,)
-        )
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        image = cur.fetchone()
+        # Récupérer jusqu'à 5 images aléatoires
+        cursor.execute("""
+            SELECT id, image_url FROM images 
+            WHERE category = %s AND status = 'pending'
+            ORDER BY RANDOM()
+            LIMIT 5
+        """, (category,))
         
-        if not image:
-            await ctx.send(f"❌ Aucune image disponible dans la catégorie **{category}**!\n💡 Utilisez le panel pour ajouter des images.")
-            cur.close()
+        images = cursor.fetchall()
+        
+        if not images:
+            await ctx.send(f"❌ Aucune image disponible dans la catégorie **{category}**!")
             conn.close()
             return
         
-        # Supprimer l'image (anti-doublon)
-        cur.execute("DELETE FROM images WHERE id = %s", (image['id'],))
+        # Envoyer toutes les URLs en un seul message
+        urls = [img['image_url'] for img in images]
+        message = '\n'.join(urls)
+        
+        await ctx.send(message)
+        
+        # Marquer les images comme envoyées
+        ids = [img['id'] for img in images]
+        cursor.execute("""
+            UPDATE images 
+            SET status = 'sent', sent_at = NOW()
+            WHERE id = ANY(%s)
+        """, (ids,))
+        
         conn.commit()
-        
-        # Créer un embed stylé
-        embed = discord.Embed(
-            title=f"🎨 {category.upper()} PFP",
-            color=discord.Color.random()
-        )
-        embed.set_image(url=image['image_url'])
-        embed.set_footer(text="✨ Image unique - Pas de doublon!")
-        
-        await ctx.send(embed=embed)
-        
-        print(f"✅ Image envoyée - Catégorie: {category}, ID: {image['id']}")
-        
-        cur.close()
+        cursor.close()
         conn.close()
         
     except Exception as e:
-        print(f"❌ Erreur: {e}")
-        await ctx.send(f"❌ Une erreur est survenue: {str(e)}")
+        print(f"❌ Erreur : {e}")
+        await ctx.send("❌ Une erreur est survenue!")
 
+# Commande : !banner
 @bot.command(name='banner')
 async def banner(ctx):
-    """Obtenir un banner aléatoire"""
+    """Envoie plusieurs banners aléatoires"""
     
     try:
         conn = get_db_connection()
         if not conn:
             await ctx.send("❌ Erreur de connexion à la base de données!")
             return
-            
-        cur = conn.cursor()
         
-        # Récupérer un banner aléatoire "pending"
-        cur.execute(
-            "SELECT * FROM images WHERE category = 'banner' AND status = 'pending' ORDER BY RANDOM() LIMIT 1"
-        )
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        image = cur.fetchone()
+        # Récupérer jusqu'à 5 banners aléatoires
+        cursor.execute("""
+            SELECT id, image_url FROM images 
+            WHERE category = 'banner' AND status = 'pending'
+            ORDER BY RANDOM()
+            LIMIT 5
+        """)
         
-        if not image:
-            await ctx.send(f"❌ Aucun banner disponible!\n💡 Utilisez le panel pour ajouter des banners.")
-            cur.close()
+        banners = cursor.fetchall()
+        
+        if not banners:
+            await ctx.send("❌ Aucun banner disponible!")
             conn.close()
             return
         
-        # Supprimer l'image (anti-doublon)
-        cur.execute("DELETE FROM images WHERE id = %s", (image['id'],))
+        # Envoyer toutes les URLs en un seul message
+        urls = [banner['image_url'] for banner in banners]
+        message = '\n'.join(urls)
+        
+        await ctx.send(message)
+        
+        # Marquer les banners comme envoyés
+        ids = [banner['id'] for banner in banners]
+        cursor.execute("""
+            UPDATE images 
+            SET status = 'sent', sent_at = NOW()
+            WHERE id = ANY(%s)
+        """, (ids,))
+        
         conn.commit()
-        
-        # Créer un embed stylé
-        embed = discord.Embed(
-            title="🎨 BANNER",
-            color=discord.Color.random()
-        )
-        embed.set_image(url=image['image_url'])
-        embed.set_footer(text="✨ Image unique - Pas de doublon!")
-        
-        await ctx.send(embed=embed)
-        
-        print(f"✅ Banner envoyé - ID: {image['id']}")
-        
-        cur.close()
+        cursor.close()
         conn.close()
         
     except Exception as e:
-        print(f"❌ Erreur: {e}")
-        await ctx.send(f"❌ Une erreur est survenue: {str(e)}")
+        print(f"❌ Erreur : {e}")
+        await ctx.send("❌ Une erreur est survenue!")
 
+# Commande : !stock
 @bot.command(name='stock')
 async def stock(ctx):
-    """Voir le nombre d'images disponibles par catégorie"""
-    
+    """Afficher le stock d'images par catégorie"""
     try:
         conn = get_db_connection()
         if not conn:
             await ctx.send("❌ Erreur de connexion à la base de données!")
             return
-            
-        cur = conn.cursor()
         
-        # Compter les images par catégorie
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute("""
+            SELECT category, COUNT(*) as count 
+            FROM images 
+            WHERE status = 'pending'
+            GROUP BY category
+            ORDER BY count DESC
+        """)
+        
+        stocks = cursor.fetchall()
+        
+        cursor.execute("SELECT COUNT(*) as total FROM images WHERE status = 'pending'")
+        total = cursor.fetchone()['total']
+        
         embed = discord.Embed(
             title="📊 Stock d'images disponibles",
-            color=discord.Color.blue()
+            color=0x3498db
         )
         
-        total = 0
-        for display_name, db_name in CATEGORIES.items():
-            cur.execute(
-                "SELECT COUNT(*) as count FROM images WHERE category = %s AND status = 'pending'",
-                (db_name,)
-            )
-            result = cur.fetchone()
-            count = result['count'] if result else 0
-            total += count
-            
-            emoji = "✅" if count > 0 else "❌"
-            embed.add_field(
-                name=f"{emoji} {display_name.capitalize()}",
-                value=f"`{count}` image(s)",
-                inline=True
-            )
+        if stocks:
+            for stock in stocks:
+                emoji = "✅" if stock['count'] > 0 else "❌"
+                embed.add_field(
+                    name=f"{emoji} {stock['category'].capitalize()}",
+                    value=f"{stock['count']} image(s)",
+                    inline=True
+                )
+        else:
+            embed.description = "❌ Aucune image disponible"
         
         embed.set_footer(text=f"Total: {total} image(s) disponible(s)")
         
         await ctx.send(embed=embed)
         
-        cur.close()
+        cursor.close()
         conn.close()
         
     except Exception as e:
-        print(f"❌ Erreur: {e}")
-        await ctx.send(f"❌ Une erreur est survenue: {str(e)}")
+        print(f"❌ Erreur : {e}")
+        await ctx.send("❌ Une erreur est survenue!")
 
-@bot.command(name='ping')
-async def ping(ctx):
-    """Vérifier si le bot est en ligne"""
-    latency = round(bot.latency * 1000)
-    embed = discord.Embed(
-        title="🏓 Pong!",
-        description=f"Latence: `{latency}ms`",
-        color=discord.Color.green()
-    )
-    await ctx.send(embed=embed)
-
-@bot.command(name='stats')
-async def stats(ctx):
-    """Afficher les statistiques du bot"""
-    try:
-        conn = get_db_connection()
-        if not conn:
-            await ctx.send("❌ Erreur de connexion à la base de données!")
-            return
-            
-        cur = conn.cursor()
-        
-        # Compter le total d'images
-        cur.execute("SELECT COUNT(*) as count FROM images WHERE status = 'pending'")
-        result = cur.fetchone()
-        total_images = result['count'] if result else 0
-        
-        # Compter par catégorie
-        cur.execute("SELECT category, COUNT(*) as count FROM images WHERE status = 'pending' GROUP BY category")
-        categories = cur.fetchall()
-        
-        embed = discord.Embed(
-            title="📊 Statistiques du Bot",
-            color=discord.Color.purple()
-        )
-        
-        embed.add_field(name="🖼️ Images totales", value=f"`{total_images}`", inline=True)
-        embed.add_field(name="🌐 Serveurs", value=f"`{len(bot.guilds)}`", inline=True)
-        embed.add_field(name="📡 Latence", value=f"`{round(bot.latency * 1000)}ms`", inline=True)
-        
-        if categories:
-            cat_text = "\n".join([f"• {cat['category']}: `{cat['count']}`" for cat in categories])
-            embed.add_field(name="📁 Par catégorie", value=cat_text, inline=False)
-        
-        embed.set_footer(text=f"Bot actif dans {len(bot.guilds)} serveur(s)")
-        
-        await ctx.send(embed=embed)
-        
-        cur.close()
-        conn.close()
-        
-    except Exception as e:
-        await ctx.send(f"❌ Erreur: {str(e)}")
-
+# Commande : !trending
 @bot.command(name='trending')
 async def trending(ctx):
-    """Afficher les catégories les plus populaires"""
+    """Afficher les catégories tendances"""
     try:
         conn = get_db_connection()
         if not conn:
             await ctx.send("❌ Erreur de connexion à la base de données!")
             return
-            
-        cur = conn.cursor()
         
-        # Top catégories avec le plus d'images
-        cur.execute("""
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute("""
             SELECT category, COUNT(*) as count 
             FROM images 
-            WHERE status = 'pending' 
-            GROUP BY category 
-            ORDER BY count DESC 
+            WHERE status = 'pending'
+            GROUP BY category
+            ORDER BY count DESC
             LIMIT 5
         """)
         
-        top_categories = cur.fetchall()
+        trends = cursor.fetchall()
         
         embed = discord.Embed(
             title="🔥 Top Catégories Tendances",
-            description="Les catégories les plus fournies",
-            color=discord.Color.orange()
+            color=0xe74c3c
         )
         
-        if top_categories:
+        if trends:
             medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-            for i, cat in enumerate(top_categories):
-                category_name = cat['category'].replace('_pdp', '').replace('_', ' ').title()
+            for i, trend in enumerate(trends):
                 embed.add_field(
-                    name=f"{medals[i]} {category_name}",
-                    value=f"`{cat['count']}` images disponibles",
+                    name=f"{medals[i]} {trend['category'].capitalize()}",
+                    value=f"{trend['count']} images disponibles",
                     inline=False
                 )
         else:
@@ -380,20 +319,68 @@ async def trending(ctx):
         
         await ctx.send(embed=embed)
         
-        cur.close()
+        cursor.close()
         conn.close()
         
     except Exception as e:
-        await ctx.send(f"❌ Erreur: {str(e)}")
+        print(f"❌ Erreur : {e}")
+        await ctx.send("❌ Une erreur est survenue!")
+
+# Commande : !ping
+@bot.command(name='ping')
+async def ping(ctx):
+    """Vérifier la latence du bot"""
+    latency = round(bot.latency * 1000)
+    await ctx.send(f"🏓 Pong! Latence: {latency}ms")
+
+# Commande : !stats
+@bot.command(name='stats')
+async def stats(ctx):
+    """Afficher les statistiques du bot"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            await ctx.send("❌ Erreur de connexion à la base de données!")
+            return
+        
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        cursor.execute("SELECT COUNT(*) as total FROM images WHERE status = 'pending'")
+        pending = cursor.fetchone()['total']
+        
+        cursor.execute("SELECT COUNT(*) as total FROM images WHERE status = 'sent'")
+        sent = cursor.fetchone()['total']
+        
+        embed = discord.Embed(
+            title="📈 Statistiques du Bot",
+            color=0x2ecc71
+        )
+        
+        embed.add_field(name="🔢 Total serveurs", value=len(bot.guilds), inline=True)
+        embed.add_field(name="👥 Total utilisateurs", value=len(bot.users), inline=True)
+        embed.add_field(name="🏓 Latence", value=f"{round(bot.latency * 1000)}ms", inline=True)
+        embed.add_field(name="📦 Images disponibles", value=pending, inline=True)
+        embed.add_field(name="✅ Images envoyées", value=sent, inline=True)
+        embed.add_field(name="📊 Total", value=pending + sent, inline=True)
+        
+        await ctx.send(embed=embed)
+        
+        cursor.close()
+        conn.close()
+        
+    except Exception as e:
+        print(f"❌ Erreur : {e}")
+        await ctx.send("❌ Une erreur est survenue!")
 
 # Lancer le bot
-print("🚀 Démarrage du bot...")
-
-# Lancer Flask dans un thread séparé
-flask_thread = Thread(target=run_flask)
-flask_thread.daemon = True
-flask_thread.start()
-
-print("🌐 Serveur Flask démarré")
-
-bot.run(TOKEN)
+if __name__ == "__main__":
+    print("🚀 Démarrage du bot...")
+    
+    # Lancer Flask dans un thread séparé
+    flask_thread = Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    
+    print("🌐 Serveur Flask démarré")
+    
+    bot.run(TOKEN)
