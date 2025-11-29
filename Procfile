@@ -1,1 +1,1 @@
-worker: python pfp.py
+web: python pfp.py
