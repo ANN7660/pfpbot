@@ -2,13 +2,14 @@ import discord
 from discord.ext import commands
 import os
 import aiohttp
-import random
+import asyncio
 import logging
 import sys
 from threading import Thread
 from flask import Flask
-import asyncio
-from datetime import datetime
+import urllib.parse
+from bs4 import BeautifulSoup
+import random
 
 # ========================================
 # LOGGING
@@ -31,9 +32,6 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 http_session = None
 
-# Stats
-user_stats = {}
-
 # ========================================
 # FLASK
 # ========================================
@@ -41,7 +39,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "✅ Bot actif!"
+    return "✅ Bot Web Scraper actif!"
 
 @app.route('/health')
 def health():
@@ -54,178 +52,309 @@ def run_flask():
         logger.error(f"❌ Flask: {e}")
 
 # ========================================
-# CATÉGORIES MASSIVES - TOUT POSSIBLE
-# ========================================
-CATEGORIES = {
-    "😎 Anime": {
-        "api": "waifu.pics",
-        "tags": ["waifu", "neko", "shinobu", "megumin", "bully", "cuddle", "cry", "hug", 
-                 "awoo", "kiss", "lick", "pat", "smug", "bonk", "yeet", "blush", "smile", 
-                 "wave", "highfive", "handhold", "nom", "bite", "glomp", "slap", "kill", 
-                 "kick", "happy", "wink", "poke", "dance", "cringe"]
-    },
-    "😺 Nekos": {
-        "api": "nekos.best",
-        "tags": ["neko", "kitsune", "waifu", "husbando", "neko", "kitsune"]
-    },
-    "✨ Waifu": {
-        "api": "waifu.im",
-        "tags": ["waifu", "maid", "marin-kitagawa", "raiden-shogun", "selfies", "uniform",
-                 "waifu", "maid", "uniform", "oppai", "ero", "selfies", "ass"]
-    },
-    "🎮 Gaming": {
-        "api": "waifu.pics",
-        "tags": ["neko", "waifu", "shinobu", "megumin", "smile", "happy", "dance", "highfive", "pat"]
-    },
-    "💖 Kawaii": {
-        "api": "nekos.best",
-        "tags": ["neko", "kitsune", "waifu", "husbando", "neko"]
-    },
-    "🔥 Action": {
-        "api": "waifu.pics",
-        "tags": ["bonk", "yeet", "bully", "slap", "kill", "kick", "bite", "glomp", "bully"]
-    },
-    "💕 Romance": {
-        "api": "waifu.pics",
-        "tags": ["cuddle", "hug", "kiss", "pat", "handhold", "smile", "blush", "nom", "lick"]
-    },
-    "😹 Drôle": {
-        "api": "waifu.pics",
-        "tags": ["smug", "dance", "cringe", "nom", "poke", "wave", "wink", "yeet", "bonk"]
-    },
-    "🌸 Cute": {
-        "api": "waifu.pics",
-        "tags": ["awoo", "neko", "waifu", "pat", "cuddle", "smile", "blush", "happy"]
-    },
-    "⚔️ Combattant": {
-        "api": "waifu.im",
-        "tags": ["waifu", "uniform", "maid", "waifu"]
-    },
-    "🎭 Expression": {
-        "api": "waifu.pics",
-        "tags": ["smile", "happy", "cry", "blush", "smug", "wink", "cringe"]
-    },
-    "👫 Social": {
-        "api": "waifu.pics",
-        "tags": ["hug", "kiss", "pat", "cuddle", "handhold", "wave", "highfive"]
-    },
-    "😈 Troll": {
-        "api": "waifu.pics",
-        "tags": ["bully", "bonk", "slap", "kick", "kill", "yeet", "smug"]
-    },
-    "🌟 Popular": {
-        "api": "waifu.pics",
-        "tags": ["waifu", "neko", "shinobu", "megumin", "smile", "pat"]
-    },
-    "🎨 Artistique": {
-        "api": "waifu.im",
-        "tags": ["waifu", "maid", "uniform", "selfies"]
-    }
-}
-
-# ========================================
 # SESSION HTTP
 # ========================================
 async def get_session():
     global http_session
     if http_session is None or http_session.closed:
-        http_session = aiohttp.ClientSession()
+        timeout = aiohttp.ClientTimeout(total=30)
+        http_session = aiohttp.ClientSession(timeout=timeout)
     return http_session
 
 # ========================================
-# APIS
+# MOTEUR DE RECHERCHE - GOOGLE IMAGES
 # ========================================
-async def fetch_waifu_pics(tag: str) -> str:
-    url = f"https://api.waifu.pics/sfw/{tag}"
+async def search_google_images(query: str, count: int = 10) -> list:
+    """Recherche d'images via Google Images"""
     try:
         session = await get_session()
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+        encoded_query = urllib.parse.quote(query)
+        
+        # URL de recherche Google Images
+        url = f"https://www.google.com/search?q={encoded_query}&tbm=isch&safe=active"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+        }
+        
+        async with session.get(url, headers=headers) as response:
             if response.status == 200:
-                data = await response.json()
-                return data.get('url')
+                html = await response.text()
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                # Extraire les URLs d'images
+                images = []
+                img_tags = soup.find_all('img')
+                
+                for img in img_tags:
+                    img_url = img.get('src') or img.get('data-src')
+                    if img_url and img_url.startswith('http') and len(images) < count:
+                        images.append(img_url)
+                
+                logger.info(f"✅ Google: {len(images)} images trouvées pour '{query}'")
+                return images[:count]
     except Exception as e:
-        logger.error(f"❌ Waifu.pics: {e}")
-    return None
+        logger.error(f"❌ Google Images: {e}")
+    return []
 
-async def fetch_nekos_best(tag: str) -> str:
-    url = f"https://nekos.best/api/v2/{tag}"
+# ========================================
+# MOTEUR DE RECHERCHE - UNSPLASH API
+# ========================================
+async def search_unsplash(query: str, count: int = 10) -> list:
+    """Recherche d'images via Unsplash API (gratuit)"""
     try:
         session = await get_session()
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-            if response.status == 200:
-                data = await response.json()
-                return data['results'][0]['url']
+        encoded_query = urllib.parse.quote(query)
+        
+        # API Unsplash (pas besoin de clé pour le public)
+        url = f"https://source.unsplash.com/1600x900/?{encoded_query}"
+        
+        images = []
+        for i in range(count):
+            # Chaque requête donne une image random
+            img_url = f"https://source.unsplash.com/1600x900/?{encoded_query},{i}"
+            images.append(img_url)
+        
+        logger.info(f"✅ Unsplash: {len(images)} images pour '{query}'")
+        return images
     except Exception as e:
-        logger.error(f"❌ Nekos.best: {e}")
-    return None
+        logger.error(f"❌ Unsplash: {e}")
+    return []
 
-async def fetch_waifu_im(tag: str) -> str:
-    url = "https://api.waifu.im/search"
-    params = {"included_tags": tag, "is_nsfw": "false"}
+# ========================================
+# MOTEUR DE RECHERCHE - PIXABAY API
+# ========================================
+async def search_pixabay(query: str, count: int = 10) -> list:
+    """Recherche via Pixabay (nécessite API key)"""
+    PIXABAY_KEY = os.getenv('PIXABAY_API_KEY', '')
+    
+    if not PIXABAY_KEY:
+        return []
+    
     try:
         session = await get_session()
-        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+        encoded_query = urllib.parse.quote(query)
+        
+        url = f"https://pixabay.com/api/?key={PIXABAY_KEY}&q={encoded_query}&image_type=photo&per_page={count}"
+        
+        async with session.get(url) as response:
             if response.status == 200:
                 data = await response.json()
-                if data.get('images'):
-                    return data['images'][0]['url']
+                images = [hit['largeImageURL'] for hit in data.get('hits', [])]
+                logger.info(f"✅ Pixabay: {len(images)} images pour '{query}'")
+                return images[:count]
     except Exception as e:
-        logger.error(f"❌ Waifu.im: {e}")
-    return None
-
-async def get_image(category: str, tag: str, retry: int = 2) -> str:
-    cat_data = CATEGORIES.get(category)
-    if not cat_data:
-        return None
-    
-    api_type = cat_data["api"]
-    
-    for attempt in range(retry):
-        try:
-            if api_type == "waifu.pics":
-                result = await fetch_waifu_pics(tag)
-            elif api_type == "nekos.best":
-                result = await fetch_nekos_best(tag)
-            elif api_type == "waifu.im":
-                result = await fetch_waifu_im(tag)
-            else:
-                return None
-            
-            if result:
-                return result
-        except Exception as e:
-            if attempt < retry - 1:
-                await asyncio.sleep(1)
-    
-    return None
+        logger.error(f"❌ Pixabay: {e}")
+    return []
 
 # ========================================
-# STATS
+# MOTEUR DE RECHERCHE - PEXELS API
 # ========================================
-def track_user_request(user_id: int, category: str):
-    if user_id not in user_stats:
-        user_stats[user_id] = {'total': 0, 'categories': {}}
-    user_stats[user_id]['total'] += 1
-    if category not in user_stats[user_id]['categories']:
-        user_stats[user_id]['categories'][category] = 0
-    user_stats[user_id]['categories'][category] += 1
+async def search_pexels(query: str, count: int = 10) -> list:
+    """Recherche via Pexels (nécessite API key)"""
+    PEXELS_KEY = os.getenv('PEXELS_API_KEY', '')
+    
+    if not PEXELS_KEY:
+        return []
+    
+    try:
+        session = await get_session()
+        encoded_query = urllib.parse.quote(query)
+        
+        url = f"https://api.pexels.com/v1/search?query={encoded_query}&per_page={count}"
+        headers = {'Authorization': PEXELS_KEY}
+        
+        async with session.get(url, headers=headers) as response:
+            if response.status == 200:
+                data = await response.json()
+                images = [photo['src']['large'] for photo in data.get('photos', [])]
+                logger.info(f"✅ Pexels: {len(images)} images pour '{query}'")
+                return images[:count]
+    except Exception as e:
+        logger.error(f"❌ Pexels: {e}")
+    return []
 
 # ========================================
-# VUE SÉLECTION SALON
+# MOTEUR DE RECHERCHE - GIPHY (GIFs)
 # ========================================
-class ChannelSelectView(discord.ui.View):
-    def __init__(self, images: list, category: str, tag: str, user, guild):
+async def search_giphy(query: str, count: int = 10) -> list:
+    """Recherche de GIFs via Giphy"""
+    try:
+        session = await get_session()
+        encoded_query = urllib.parse.quote(query)
+        
+        # API publique Giphy
+        url = f"https://api.giphy.com/v1/gifs/search?api_key=dc6zaTOxFJmzC&q={encoded_query}&limit={count}"
+        
+        async with session.get(url) as response:
+            if response.status == 200:
+                data = await response.json()
+                images = [gif['images']['original']['url'] for gif in data.get('data', [])]
+                logger.info(f"✅ Giphy: {len(images)} GIFs pour '{query}'")
+                return images[:count]
+    except Exception as e:
+        logger.error(f"❌ Giphy: {e}")
+    return []
+
+# ========================================
+# AGRÉGATEUR - RECHERCHE MULTI-SOURCES
+# ========================================
+async def search_all_sources(query: str, count: int = 10) -> dict:
+    """Recherche sur TOUTES les sources disponibles"""
+    
+    results = {
+        'google': [],
+        'unsplash': [],
+        'pixabay': [],
+        'pexels': [],
+        'giphy': [],
+        'total': 0
+    }
+    
+    # Lancer toutes les recherches en parallèle
+    tasks = [
+        search_google_images(query, count),
+        search_unsplash(query, count),
+        search_pixabay(query, count),
+        search_pexels(query, count),
+        search_giphy(query, count)
+    ]
+    
+    responses = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    results['google'] = responses[0] if not isinstance(responses[0], Exception) else []
+    results['unsplash'] = responses[1] if not isinstance(responses[1], Exception) else []
+    results['pixabay'] = responses[2] if not isinstance(responses[2], Exception) else []
+    results['pexels'] = responses[3] if not isinstance(responses[3], Exception) else []
+    results['giphy'] = responses[4] if not isinstance(responses[4], Exception) else []
+    
+    # Calculer total
+    results['total'] = sum([
+        len(results['google']),
+        len(results['unsplash']),
+        len(results['pixabay']),
+        len(results['pexels']),
+        len(results['giphy'])
+    ])
+    
+    return results
+
+# ========================================
+# VUES DISCORD
+# ========================================
+class SourceSelectView(discord.ui.View):
+    def __init__(self, results: dict, query: str, user, guild):
         super().__init__(timeout=300)
-        self.images = images
-        self.category = category
-        self.tag = tag
+        self.results = results
+        self.query = query
         self.user = user
         self.guild = guild
-        self.selected_channel = None
         
-        # Créer le menu déroulant avec les salons
+        # Créer les boutons pour chaque source
+        if results['google']:
+            btn = discord.ui.Button(
+                label=f"🔍 Google ({len(results['google'])})",
+                style=discord.ButtonStyle.primary
+            )
+            btn.callback = lambda i: self.show_source(i, 'google')
+            self.add_item(btn)
+        
+        if results['unsplash']:
+            btn = discord.ui.Button(
+                label=f"📸 Unsplash ({len(results['unsplash'])})",
+                style=discord.ButtonStyle.primary
+            )
+            btn.callback = lambda i: self.show_source(i, 'unsplash')
+            self.add_item(btn)
+        
+        if results['pixabay']:
+            btn = discord.ui.Button(
+                label=f"🖼️ Pixabay ({len(results['pixabay'])})",
+                style=discord.ButtonStyle.primary
+            )
+            btn.callback = lambda i: self.show_source(i, 'pixabay')
+            self.add_item(btn)
+        
+        if results['pexels']:
+            btn = discord.ui.Button(
+                label=f"📷 Pexels ({len(results['pexels'])})",
+                style=discord.ButtonStyle.primary
+            )
+            btn.callback = lambda i: self.show_source(i, 'pexels')
+            self.add_item(btn)
+        
+        if results['giphy']:
+            btn = discord.ui.Button(
+                label=f"🎬 Giphy ({len(results['giphy'])})",
+                style=discord.ButtonStyle.success
+            )
+            btn.callback = lambda i: self.show_source(i, 'giphy')
+            self.add_item(btn)
+        
+        # Bouton "Tout afficher"
+        all_btn = discord.ui.Button(
+            label=f"🌐 Tout ({results['total']})",
+            style=discord.ButtonStyle.danger,
+            row=1
+        )
+        all_btn.callback = self.show_all
+        self.add_item(all_btn)
+    
+    async def show_source(self, interaction: discord.Interaction, source: str):
+        images = self.results[source]
+        embeds = []
+        
+        for i, img_url in enumerate(images[:10], 1):
+            embed = discord.Embed(
+                title=f"#{i} - {source.title()}",
+                color=discord.Color.blue()
+            )
+            embed.set_image(url=img_url)
+            embeds.append(embed)
+        
+        view = ImageSelectionView(images, self.query, source, self.user, self.guild)
+        
+        await interaction.response.edit_message(
+            content=f"🔍 **{len(images)} images de {source.title()}** pour '{self.query}'",
+            embeds=embeds[:10],
+            view=view
+        )
+    
+    async def show_all(self, interaction: discord.Interaction):
+        all_images = []
+        for source_images in self.results.values():
+            if isinstance(source_images, list):
+                all_images.extend(source_images)
+        
+        embeds = []
+        for i, img_url in enumerate(all_images[:10], 1):
+            embed = discord.Embed(
+                title=f"#{i}",
+                color=discord.Color.random()
+            )
+            embed.set_image(url=img_url)
+            embeds.append(embed)
+        
+        view = ImageSelectionView(all_images, self.query, "Toutes sources", self.user, self.guild)
+        
+        await interaction.response.edit_message(
+            content=f"🌐 **{len(all_images)} images totales** pour '{self.query}'",
+            embeds=embeds[:10],
+            view=view
+        )
+
+class ChannelSelectView(discord.ui.View):
+    def __init__(self, images: list, query: str, user, guild):
+        super().__init__(timeout=300)
+        self.images = images
+        self.query = query
+        self.user = user
+        self.guild = guild
+        
         options = []
-        for channel in guild.text_channels[:25]:  # Max 25
+        for channel in guild.text_channels[:25]:
             options.append(
                 discord.SelectOption(
                     label=f"#{channel.name}",
@@ -236,7 +365,7 @@ class ChannelSelectView(discord.ui.View):
         
         if options:
             select = discord.ui.Select(
-                placeholder="📌 Choisis le salon où envoyer les images...",
+                placeholder="📌 Choisis le salon...",
                 options=options
             )
             select.callback = self.channel_selected
@@ -251,36 +380,37 @@ class ChannelSelectView(discord.ui.View):
             return
         
         await interaction.response.edit_message(
-            content=f"📤 Envoi de **{len(self.images)} images** vers {channel.mention}...",
+            content=f"📤 Envoi de **{len(self.images)} images**...",
             view=None
         )
         
-        # Envoyer les images SANS embed, juste les URLs
-        for img_url in self.images:
-            await channel.send(img_url)
+        # Envoyer JUSTE les URLs, sans texte
+        message_content = "\n".join(self.images)
         
-        # Message de confirmation
-        await channel.send(f"✅ **{len(self.images)} images** envoyées par {self.user.mention}!")
+        # Envoyer en 1 seul message (limite 2000 caractères)
+        if len(message_content) < 2000:
+            await channel.send(message_content)
+        else:
+            # Si trop long, envoyer par paquets de 5 images
+            for i in range(0, len(self.images), 5):
+                batch = self.images[i:i+5]
+                await channel.send("\n".join(batch))
         
         await interaction.followup.send(
             f"✅ {len(self.images)} images envoyées dans {channel.mention}!",
             ephemeral=True
         )
 
-# ========================================
-# VUE SÉLECTION D'IMAGES
-# ========================================
 class ImageSelectionView(discord.ui.View):
-    def __init__(self, images: list, category: str, tag: str, user, guild):
+    def __init__(self, images: list, query: str, source: str, user, guild):
         super().__init__(timeout=600)
         self.images = images
-        self.category = category
-        self.tag = tag
+        self.query = query
+        self.source = source
         self.user = user
         self.guild = guild
         self.selected_images = []
         
-        # Boutons pour chaque image
         for i in range(min(len(images), 10)):
             button = discord.ui.Button(
                 label=f"#{i+1}",
@@ -291,7 +421,6 @@ class ImageSelectionView(discord.ui.View):
             button.callback = self.create_callback(i)
             self.add_item(button)
         
-        # Bouton tout sélectionner
         all_btn = discord.ui.Button(
             label="📌 Tout",
             style=discord.ButtonStyle.primary,
@@ -301,7 +430,6 @@ class ImageSelectionView(discord.ui.View):
         all_btn.callback = self.select_all
         self.add_item(all_btn)
         
-        # Bouton envoyer
         send_btn = discord.ui.Button(
             label="✅ Envoyer",
             style=discord.ButtonStyle.success,
@@ -351,109 +479,15 @@ class ImageSelectionView(discord.ui.View):
             )
             return
         
-        # Récupérer les images sélectionnées
         selected = [self.images[i] for i in self.selected_images]
-        
-        # Afficher le menu de sélection de salon
-        view = ChannelSelectView(selected, self.category, self.tag, self.user, self.guild)
+        view = ChannelSelectView(selected, self.query, self.user, self.guild)
         
         await interaction.response.edit_message(
             content=f"📌 **{len(selected)} images** sélectionnées!\n\n"
-                   f"👇 Choisis maintenant le salon où les envoyer:",
+                   f"👇 Choisis le salon:",
             embeds=[],
             view=view
         )
-
-# SUITE DANS PARTIE 2...
-# ========================================
-# VUES DISCORD - MENUS
-# ========================================
-class CategorySelect(discord.ui.Select):
-    def __init__(self):
-        options = [
-            discord.SelectOption(
-                label=cat,
-                emoji=cat.split()[0],
-                description=f"{len(CATEGORIES[cat]['tags'])} styles"
-            )
-            for cat in list(CATEGORIES.keys())[:25]
-        ]
-        super().__init__(placeholder="🎨 Choisis une catégorie...", options=options)
-    
-    async def callback(self, interaction: discord.Interaction):
-        selected = self.values[0]
-        tags = CATEGORIES[selected]['tags']
-        track_user_request(interaction.user.id, selected)
-        view = TagView(selected, tags, interaction.user, interaction.guild)
-        embed = discord.Embed(
-            title=f"{selected}",
-            description=f"**{len(tags)}** styles disponibles!",
-            color=discord.Color.purple()
-        )
-        await interaction.response.edit_message(embed=embed, view=view)
-
-class CategoryView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=300)
-        self.add_item(CategorySelect())
-    
-    @discord.ui.button(label="❌ Annuler", style=discord.ButtonStyle.danger)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="✅ Annulé!", embed=None, view=None)
-
-class TagSelect(discord.ui.Select):
-    def __init__(self, category: str, tags: list, user, guild):
-        self.category = category
-        self.user = user
-        self.guild = guild
-        options = [
-            discord.SelectOption(label=tag.title(), value=tag)
-            for tag in tags[:25]
-        ]
-        super().__init__(placeholder="✨ Choisis un style...", options=options)
-    
-    async def callback(self, interaction: discord.Interaction):
-        tag = self.values[0]
-        await interaction.response.edit_message(
-            content=f"⏳ Chargement de 10 images **{tag}**...",
-            embed=None,
-            view=None
-        )
-        
-        images = []
-        for _ in range(10):
-            img_url = await get_image(self.category, tag)
-            if img_url:
-                images.append(img_url)
-        
-        if images:
-            embeds = []
-            for i, img_url in enumerate(images, 1):
-                embed = discord.Embed(title=f"#{i}", color=discord.Color.random())
-                embed.set_image(url=img_url)
-                embeds.append(embed)
-            
-            view = ImageSelectionView(images, self.category, tag, self.user, self.guild)
-            await interaction.edit_original_response(
-                content=f"📚 **{len(images)} images de {tag.title()}**\n"
-                       f"👇 Sélectionne celles que tu veux!",
-                embeds=embeds[:10],
-                view=view
-            )
-
-class TagView(discord.ui.View):
-    def __init__(self, category: str, tags: list, user, guild):
-        super().__init__(timeout=300)
-        self.add_item(TagSelect(category, tags, user, guild))
-    
-    @discord.ui.button(label="⬅️ Retour", style=discord.ButtonStyle.secondary)
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(
-            title="🎨 Recherche PFP",
-            description=f"**{len(CATEGORIES)}** catégories!",
-            color=discord.Color.blue()
-        )
-        await interaction.response.edit_message(embed=embed, view=CategoryView())
 
 # ========================================
 # COMMANDES
@@ -462,134 +496,132 @@ class TagView(discord.ui.View):
 async def on_ready():
     logger.info(f'✅ {bot.user} connecté!')
     logger.info(f'📊 {len(bot.guilds)} serveurs')
-    logger.info(f'🎨 {len(CATEGORIES)} catégories')
-    total_tags = sum(len(cat['tags']) for cat in CATEGORIES.values())
-    logger.info(f'🏷️ {total_tags} tags')
+    logger.info(f'🔍 Moteur de recherche WEB actif!')
     logger.info('━' * 50)
 
-@bot.command(name='pdp')
-async def search_pfp(ctx):
-    """Menu interactif avec 10 images"""
-    embed = discord.Embed(
-        title="🎨 Recherche Photo de Profil",
-        description=f"**{len(CATEGORIES)} catégories** disponibles!\n\n"
-                    "**Comment ça marche:**\n"
-                    "1️⃣ Choisis une catégorie\n"
-                    "2️⃣ Choisis un style\n"
-                    "3️⃣ 10 images apparaissent\n"
-                    "4️⃣ Sélectionne celles que tu veux\n"
-                    "5️⃣ Choisis le salon où envoyer\n"
-                    "6️⃣ Les images sont envoyées!",
-        color=discord.Color.red()
-    )
-    await ctx.send(embed=embed, view=CategoryView())
-
-@bot.command(name='recherche')
-async def search_cmd(ctx, *, query: str):
-    """Recherche 10 images par mot-clé"""
-    msg = await ctx.send(f"🔍 Recherche **{query}**...")
+@bot.command(name='search')
+async def search_web(ctx, *, query: str):
+    """🔍 Recherche WEB d'images"""
+    msg = await ctx.send(f"🔍 Recherche sur le web: **{query}**...")
     
-    matching = []
-    for category, data in CATEGORIES.items():
-        for tag in data['tags']:
-            if query.lower() in tag.lower():
-                matching.append((category, tag))
+    # Rechercher sur toutes les sources
+    results = await search_all_sources(query, 10)
     
-    if not matching:
-        for category in CATEGORIES.keys():
-            if query.lower() in category.lower():
-                tags = CATEGORIES[category]['tags']
-                matching = [(category, random.choice(tags))]
-                break
-    
-    if not matching:
-        await msg.edit(content=f"❌ Aucun résultat pour **{query}**")
+    if results['total'] == 0:
+        await msg.edit(content=f"❌ Aucune image trouvée pour **{query}**")
         return
     
-    category, tag = random.choice(matching)
-    track_user_request(ctx.author.id, category)
-    
-    images = []
-    for _ in range(10):
-        img_url = await get_image(category, tag)
-        if img_url:
-            images.append(img_url)
-    
-    if images:
-        embeds = []
-        for i, img_url in enumerate(images, 1):
-            embed = discord.Embed(title=f"#{i}", color=discord.Color.random())
-            embed.set_image(url=img_url)
-            embeds.append(embed)
-        
-        view = ImageSelectionView(images, category, tag, ctx.author, ctx.guild)
-        await msg.edit(
-            content=f"🔍 **{len(images)} images** trouvées pour **{query}**!\n"
-                   f"👇 Sélectionne celles que tu veux!",
-            embeds=embeds[:10],
-            view=view
-        )
-
-@bot.command(name='batch')
-async def batch_cmd(ctx, count: int = 10):
-    """Génère 10 images random"""
-    count = min(max(count, 1), 10)
-    category = random.choice(list(CATEGORIES.keys()))
-    tags = CATEGORIES[category]['tags']
-    tag = random.choice(tags)
-    
-    msg = await ctx.send(f"⏳ Chargement de {count} images...")
-    track_user_request(ctx.author.id, category)
-    
-    images = []
-    for _ in range(count):
-        img_url = await get_image(category, tag)
-        if img_url:
-            images.append(img_url)
-    
-    if images:
-        embeds = []
-        for i, img_url in enumerate(images, 1):
-            embed = discord.Embed(title=f"#{i}", color=discord.Color.random())
-            embed.set_image(url=img_url)
-            embeds.append(embed)
-        
-        view = ImageSelectionView(images, category, tag, ctx.author, ctx.guild)
-        await msg.edit(
-            content=f"📚 **{len(images)} images de {tag.title()}**\n"
-                   f"👇 Sélectionne celles que tu veux!",
-            embeds=embeds[:10],
-            view=view
-        )
-
-@bot.command(name='aide')
-async def help_cmd(ctx):
-    """Aide complète avec embed"""
+    # Créer l'embed récapitulatif
     embed = discord.Embed(
-        title="📚 Aide - Bot PFP",
-        description="Voici toutes les commandes disponibles:",
+        title=f"🔍 Résultats pour: {query}",
+        description=f"**{results['total']} images** trouvées!",
         color=discord.Color.green()
     )
     
-    embed.add_field(
-        name="🎨 Commandes Principales",
-        value=(
-            "**!pdp** - Menu interactif complet\n"
-            "**!recherche <mot>** - Recherche par mot-clé\n"
-            "**!batch [nombre]** - Génère 10 images random"
-        ),
-        inline=False
+    if results['google']:
+        embed.add_field(name="🔍 Google", value=f"{len(results['google'])} images", inline=True)
+    if results['unsplash']:
+        embed.add_field(name="📸 Unsplash", value=f"{len(results['unsplash'])} images", inline=True)
+    if results['pixabay']:
+        embed.add_field(name="🖼️ Pixabay", value=f"{len(results['pixabay'])} images", inline=True)
+    if results['pexels']:
+        embed.add_field(name="📷 Pexels", value=f"{len(results['pexels'])} images", inline=True)
+    if results['giphy']:
+        embed.add_field(name="🎬 Giphy", value=f"{len(results['giphy'])} GIFs", inline=True)
+    
+    embed.set_footer(text="Clique sur une source pour voir les images!")
+    
+    view = SourceSelectView(results, query, ctx.author, ctx.guild)
+    await msg.edit(content=None, embed=embed, view=view)
+
+@bot.command(name='google')
+async def google_search(ctx, *, query: str):
+    """🔍 Recherche Google Images uniquement"""
+    msg = await ctx.send(f"🔍 Google: **{query}**...")
+    
+    images = await search_google_images(query, 10)
+    
+    if not images:
+        await msg.edit(content=f"❌ Aucune image trouvée sur Google pour **{query}**")
+        return
+    
+    embeds = []
+    for i, img_url in enumerate(images[:10], 1):
+        embed = discord.Embed(title=f"#{i} - Google", color=discord.Color.blue())
+        embed.set_image(url=img_url)
+        embeds.append(embed)
+    
+    view = ImageSelectionView(images, query, "Google", ctx.author, ctx.guild)
+    await msg.edit(
+        content=f"🔍 **{len(images)} images Google** pour '{query}'",
+        embeds=embeds[:10],
+        view=view
+    )
+
+@bot.command(name='unsplash')
+async def unsplash_search(ctx, *, query: str):
+    """📸 Recherche Unsplash uniquement"""
+    msg = await ctx.send(f"📸 Unsplash: **{query}**...")
+    
+    images = await search_unsplash(query, 10)
+    
+    if not images:
+        await msg.edit(content=f"❌ Aucune image trouvée sur Unsplash pour **{query}**")
+        return
+    
+    embeds = []
+    for i, img_url in enumerate(images[:10], 1):
+        embed = discord.Embed(title=f"#{i} - Unsplash", color=discord.Color.green())
+        embed.set_image(url=img_url)
+        embeds.append(embed)
+    
+    view = ImageSelectionView(images, query, "Unsplash", ctx.author, ctx.guild)
+    await msg.edit(
+        content=f"📸 **{len(images)} images Unsplash** pour '{query}'",
+        embeds=embeds[:10],
+        view=view
+    )
+
+@bot.command(name='gif')
+async def gif_search(ctx, *, query: str):
+    """🎬 Recherche GIFs Giphy"""
+    msg = await ctx.send(f"🎬 Giphy: **{query}**...")
+    
+    images = await search_giphy(query, 10)
+    
+    if not images:
+        await msg.edit(content=f"❌ Aucun GIF trouvé sur Giphy pour **{query}**")
+        return
+    
+    embeds = []
+    for i, img_url in enumerate(images[:10], 1):
+        embed = discord.Embed(title=f"#{i} - Giphy", color=discord.Color.purple())
+        embed.set_image(url=img_url)
+        embeds.append(embed)
+    
+    view = ImageSelectionView(images, query, "Giphy", ctx.author, ctx.guild)
+    await msg.edit(
+        content=f"🎬 **{len(images)} GIFs Giphy** pour '{query}'",
+        embeds=embeds[:10],
+        view=view
+    )
+
+@bot.command(name='aide')
+async def help_cmd(ctx):
+    """📚 Aide"""
+    embed = discord.Embed(
+        title="🔍 Bot Moteur de Recherche WEB",
+        description="Recherche d'images sur INTERNET!",
+        color=discord.Color.gold()
     )
     
     embed.add_field(
-        name="📌 Comment ça fonctionne?",
+        name="🌐 Commandes de recherche",
         value=(
-            "1. Lance une commande (!pdp, !recherche, !batch)\n"
-            "2. 10 images apparaissent avec des embeds\n"
-            "3. Clique sur #1, #2... pour sélectionner\n"
-            "4. Clique sur ✅ Envoyer\n"
-            "5. Choisis le salon dans le menu déroulant\n"
-            "6. Les images sont envoyées SANS embed!"
+            "**!search <recherche>** - Cherche sur TOUTES les sources\n"
+            "**!google <recherche>** - Google Images uniquement\n"
+            "**!unsplash <recherche>** - Unsplash uniquement\n"
+            "**!gif <recherche>** - Giphy GIFs uniquement"
         ),
         inline=False
     )
@@ -597,46 +629,38 @@ async def help_cmd(ctx):
     embed.add_field(
         name="💡 Exemples",
         value=(
-            "`!pdp` - Menu complet\n"
-            "`!recherche neko` - 10 images neko\n"
-            "`!recherche cute waifu` - Recherche avancée\n"
-            "`!batch 10` - 10 images random"
+            "`!search anime girl dark`\n"
+            "`!google cute cat pfp`\n"
+            "`!unsplash sunset landscape`\n"
+            "`!gif funny cat`"
         ),
         inline=False
     )
     
     embed.add_field(
-        name="🎯 Catégories disponibles",
-        value=", ".join([cat.split()[1] if len(cat.split()) > 1 else cat for cat in list(CATEGORIES.keys())[:10]]) + "...",
+        name="🔍 Sources disponibles",
+        value="🔍 Google Images\n📸 Unsplash\n🖼️ Pixabay\n📷 Pexels\n🎬 Giphy",
         inline=False
     )
     
     embed.add_field(
-        name="ℹ️ Autres commandes",
-        value="**!ping** - Latence\n**!stats** - Statistiques",
+        name="⚙️ APIs optionnelles",
+        value=(
+            "Pour activer Pixabay: `PIXABAY_API_KEY`\n"
+            "Pour activer Pexels: `PEXELS_API_KEY`"
+        ),
         inline=False
     )
     
-    total_tags = sum(len(cat['tags']) for cat in CATEGORIES.values())
-    embed.set_footer(text=f"✨ {len(CATEGORIES)} catégories • {total_tags} styles disponibles")
+    embed.set_footer(text="Recherche TOUT sur le web!")
     
     await ctx.send(embed=embed)
 
 @bot.command(name='ping')
 async def ping(ctx):
-    """Latence"""
+    """🏓 Latence"""
     latency = round(bot.latency * 1000)
     await ctx.send(f'🏓 Pong! **{latency}ms**')
-
-@bot.command(name='stats')
-async def stats_cmd(ctx):
-    """Stats globales"""
-    total_tags = sum(len(cat['tags']) for cat in CATEGORIES.values())
-    embed = discord.Embed(title="📊 Statistiques", color=discord.Color.blue())
-    embed.add_field(name="Serveurs", value=f"🖥️ {len(bot.guilds)}", inline=True)
-    embed.add_field(name="Catégories", value=f"📂 {len(CATEGORIES)}", inline=True)
-    embed.add_field(name="Tags", value=f"🏷️ {total_tags}", inline=True)
-    await ctx.send(embed=embed)
 
 # ========================================
 # CLEANUP
@@ -655,7 +679,7 @@ if __name__ == '__main__':
         logger.error("❌ DISCORD_TOKEN manquant!")
         sys.exit(1)
     
-    logger.info("🚀 Démarrage...")
+    logger.info("🚀 Démarrage Moteur de Recherche WEB...")
     Thread(target=run_flask, daemon=True).start()
     
     try:
