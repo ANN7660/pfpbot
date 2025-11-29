@@ -75,13 +75,13 @@ async def help_command(ctx):
     
     embed.add_field(
         name="🖼️ !pdp <catégorie>",
-        value="Envoie plusieurs photos de profil aléatoires\nEx: `!pdp anime`\nCatégories: anime, boy, girl, aesthetic, cute",
+        value="Envoie 15 photos de profil aléatoires\nEx: `!pdp anime`\nCatégories: anime, boy, girl, aesthetic, cute",
         inline=False
     )
     
     embed.add_field(
         name="🎭 !banner",
-        value="Envoie plusieurs banners aléatoires pour Discord",
+        value="Envoie 15 banners aléatoires pour Discord",
         inline=False
     )
     
@@ -109,14 +109,14 @@ async def help_command(ctx):
         inline=False
     )
     
-    embed.set_footer(text="Développé avec ❤️ • Chaque image est unique - Pas de doublon !")
+    embed.set_footer(text="Développé avec ❤️ • 15 images par commande - Pas de doublon !")
     
     await ctx.send(embed=embed)
 
 # Commande : !pdp <category>
 @bot.command(name='pdp')
 async def pdp(ctx, category: str = None):
-    """Envoie plusieurs photos de profil aléatoires"""
+    """Envoie 15 photos de profil aléatoires"""
     
     if not category:
         await ctx.send("❌ Veuillez spécifier une catégorie !\nEx: `!pdp anime`\nCatégories disponibles: anime, boy, girl, aesthetic, cute")
@@ -137,12 +137,12 @@ async def pdp(ctx, category: str = None):
         
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        # Récupérer jusqu'à 5 images aléatoires
+        # Récupérer 15 images aléatoires
         cursor.execute("""
             SELECT id, image_url FROM images 
             WHERE category = %s AND status = 'pending'
             ORDER BY RANDOM()
-            LIMIT 5
+            LIMIT 15
         """, (category,))
         
         images = cursor.fetchall()
@@ -177,7 +177,7 @@ async def pdp(ctx, category: str = None):
 # Commande : !banner
 @bot.command(name='banner')
 async def banner(ctx):
-    """Envoie plusieurs banners aléatoires"""
+    """Envoie 15 banners aléatoires"""
     
     try:
         conn = get_db_connection()
@@ -187,12 +187,12 @@ async def banner(ctx):
         
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        # Récupérer jusqu'à 5 banners aléatoires
+        # Récupérer 15 banners aléatoires
         cursor.execute("""
             SELECT id, image_url FROM images 
             WHERE category = 'banner' AND status = 'pending'
             ORDER BY RANDOM()
-            LIMIT 5
+            LIMIT 15
         """)
         
         banners = cursor.fetchall()
@@ -315,7 +315,7 @@ async def trending(ctx):
         else:
             embed.description = "❌ Aucune donnée disponible"
         
-        embed.set_footer(text="Utilisez !pdp <catégorie> pour obtenir une image !")
+        embed.set_footer(text="Utilisez !pdp <catégorie> pour obtenir 15 images !")
         
         await ctx.send(embed=embed)
         
