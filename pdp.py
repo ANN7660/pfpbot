@@ -5,6 +5,22 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import random
 from dotenv import load_dotenv
+from flask import Flask
+from threading import Thread
+
+# Flask pour Render Web Service
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 Bot PFP Discord is running!"
+
+@app.route('/health')
+def health():
+    return {"status": "alive", "bot": str(bot.user) if bot.user else "starting"}
+
+def run_flask():
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 10000)))
 
 # Charger les variables d'environnement
 load_dotenv()
@@ -372,4 +388,12 @@ async def trending(ctx):
 
 # Lancer le bot
 print("🚀 Démarrage du bot...")
+
+# Lancer Flask dans un thread séparé
+flask_thread = Thread(target=run_flask)
+flask_thread.daemon = True
+flask_thread.start()
+
+print("🌐 Serveur Flask démarré")
+
 bot.run(TOKEN)
