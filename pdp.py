@@ -82,84 +82,6 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # ----------------------
-# FONCTION SCRAPING PINTEREST
-# ----------------------
-async def scrape_pinterest(url, count):
-    """
-    Scrape Pinterest avec headers avancés et parsing HTML
-    """
-    try:
-        # Headers plus complets pour éviter le blocage
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Cache-Control': 'max-age=0',
-        }
-        
-        # Nettoyer l'URL
-        clean_url = url.rstrip('/')
-        
-        # Requête asynchrone
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: requests.get(clean_url, headers=headers, timeout=20, allow_redirects=True)
-        )
-        
-        if response.status_code != 200:
-            logging.error(f"Erreur Pinterest: Status {response.status_code}")
-            return []
-        
-        # Chercher les URLs d'images dans le HTML
-        html_content = response.text
-        image_urls = []
-        
-        # Pattern pour trouver les URLs Pinterest d'images
-        patterns = [
-            r'"url":"(https://i\.pinimg\.com/originals/[^"]+)"',
-            r'"url":"(https://i\.pinimg\.com/736x/[^"]+)"',
-            r'https://i\.pinimg\.com/originals/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]+\.(jpg|png|jpeg)',
-            r'https://i\.pinimg\.com/736x/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]+\.(jpg|png|jpeg)',
-        ]
-        
-        for pattern in patterns:
-            matches = re.findall(pattern, html_content)
-            for match in matches:
-                if isinstance(match, tuple):
-                    img_url = match[0]
-                else:
-                    img_url = match
-                
-                # Nettoyer l'URL si elle contient des échappements
-                img_url = img_url.replace('\\/', '/')
-                
-                if img_url not in image_urls:
-                    image_urls.append(img_url)
-                
-                if len(image_urls) >= count:
-                    break
-            
-            if len(image_urls) >= count:
-                break
-        
-        logging.info(f"Trouvé {len(image_urls)} images sur Pinterest")
-        return image_urls[:count]
-        
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Erreur réseau Pinterest: {e}")
-        return []
-    except Exception as e:
-        logging.error(f"Erreur scraping Pinterest: {e}")
-        return []
-
-# ----------------------
 # COMMANDE !HELP
 # ----------------------
 @bot.command(name="help")
@@ -176,7 +98,7 @@ async def help_cmd(ctx):
     )
     embed.add_field(
         name="📌 !url",
-        value="Importer des images depuis Pinterest",
+        value="Importer des images manuellement (copier-coller les URLs)",
         inline=False
     )
     embed.add_field(
@@ -189,7 +111,7 @@ async def help_cmd(ctx):
         value="Afficher ce message",
         inline=False
     )
-    embed.set_footer(text="Bot Pinterest • Développé avec ❤️")
+    embed.set_footer(text="Bot Pinterest • Import manuel (Pinterest bloque le scraping auto)")
     await ctx.send(embed=embed)
 
 # ----------------------
@@ -293,36 +215,60 @@ async def pdp(ctx):
         await ctx.send(f"`[{i}/{len(urls)}]` {url}")
 
 # ----------------------
-# COMMANDE !URL
+# COMMANDE !URL (VERSION MANUELLE)
 # ----------------------
 @bot.command(name="url")
 async def url_cmd(ctx):
-    """Commande pour importer des images depuis Pinterest"""
+    """Import manuel d'images (copier-coller les URLs)"""
     
     embed = discord.Embed(
-        title="📌 Import Pinterest",
-        description="Remplissez les informations ci-dessous :",
+        title="📌 Import d'images",
+        description="**Méthode manuelle** (Pinterest bloque le scraping automatique)",
         color=0xe74c3c
     )
-    embed.add_field(name="1️⃣ URL Pinterest", value="Collez l'URL du board/profil", inline=False)
-    embed.add_field(name="2️⃣ Catégorie", value="boy, girl, anime, aesthetic, cute, banner, match", inline=False)
-    embed.add_field(name="3️⃣ Nombre", value="Combien d'images ? (1-50)", inline=False)
-    embed.set_footer(text="Répondez dans l'ordre | Timeout: 60s par étape")
+    embed.add_field(
+        name="📝 Instructions",
+        value=(
+            "1️⃣ Allez sur Pinterest et ouvrez le board\n"
+            "2️⃣ Clic droit sur chaque image → **Copier l'adresse de l'image**\n"
+            "3️⃣ Collez toutes les URLs ici (une par ligne ou séparées par des espaces)\n"
+            "4️⃣ Je vous demanderai ensuite la catégorie"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="💡 Astuce",
+        value="Vous pouvez coller 50+ URLs d'un coup !",
+        inline=False
+    )
+    embed.set_footer(text="Timeout: 120s")
     
     await ctx.send(embed=embed)
     
     def check(m):
         return m.author == ctx.author and m.channel == ctx.channel
     
-    # ---- ÉTAPE 1: URL ----
-    await ctx.send("**1️⃣ Entrez l'URL Pinterest :**")
+    # ---- ÉTAPE 1: RÉCUPÉRER LES URLs ----
+    await ctx.send("**📎 Collez vos URLs d'images :**")
     try:
-        url_msg = await bot.wait_for("message", timeout=60, check=check)
-        pinterest_url = url_msg.content.strip()
+        urls_msg = await bot.wait_for("message", timeout=120, check=check)
         
-        # Validation basique
-        if "pinterest" not in pinterest_url.lower():
-            return await ctx.send("❌ L'URL doit contenir 'pinterest'")
+        # Extraire toutes les URLs de Pinterest
+        content = urls_msg.content
+        url_pattern = r'https?://[^\s]+'
+        found_urls = re.findall(url_pattern, content)
+        
+        # Filtrer uniquement les URLs d'images Pinterest
+        image_urls = [
+            url for url in found_urls 
+            if 'pinimg.com' in url or 'pinterest.com' in url
+        ]
+        
+        if not image_urls:
+            return await ctx.send("❌ Aucune URL d'image trouvée. Assurez-vous de copier les URLs d'images Pinterest.")
+        
+        await ctx.send(f"✅ **{len(image_urls)} URLs détectées**")
+        
     except asyncio.TimeoutError:
         return await ctx.send("⏱️ Temps écoulé.")
     
@@ -338,73 +284,47 @@ async def url_cmd(ctx):
     except asyncio.TimeoutError:
         return await ctx.send("⏱️ Temps écoulé.")
     
-    # ---- ÉTAPE 3: NOMBRE ----
-    await ctx.send("**3️⃣ Combien d'images ? (1-50) :**")
-    try:
-        count_msg = await bot.wait_for("message", timeout=60, check=check)
-        count = int(count_msg.content.strip())
-        count = max(1, min(count, 50))  # Limite entre 1 et 50
-    except ValueError:
-        return await ctx.send("❌ Veuillez entrer un nombre valide.")
-    except asyncio.TimeoutError:
-        return await ctx.send("⏱️ Temps écoulé.")
+    # ---- INSERTION EN DB ----
+    status_msg = await ctx.send("⏳ **Insertion en cours...**")
     
-    # ---- RÉCAPITULATIF ----
-    recap_embed = discord.Embed(
-        title="✅ Récapitulatif",
+    conn = db_connect()
+    if not conn:
+        return await status_msg.edit(content="❌ Erreur de connexion DB.")
+    
+    cur = conn.cursor()
+    inserted = 0
+    duplicates = 0
+    
+    for img_url in image_urls:
+        try:
+            cur.execute(
+                "INSERT INTO images (url, category, used) VALUES (%s, %s, FALSE)",
+                (img_url, category)
+            )
+            if cur.rowcount > 0:
+                inserted += 1
+        except psycopg2.IntegrityError:
+            duplicates += 1
+            conn.rollback()
+        except Exception as e:
+            logging.error(f"Erreur insertion: {e}")
+            conn.rollback()
+    
+    conn.commit()
+    cur.close()
+    conn.close()
+    
+    # ---- RÉSULTAT FINAL ----
+    final_embed = discord.Embed(
+        title="✅ Import terminé !",
         color=0x2ecc71
     )
-    recap_embed.add_field(name="URL", value=pinterest_url, inline=False)
-    recap_embed.add_field(name="Catégorie", value=category, inline=True)
-    recap_embed.add_field(name="Nombre", value=str(count), inline=True)
-    recap_embed.set_footer(text="Scraping en cours...")
+    final_embed.add_field(name="📊 Total", value=str(len(image_urls)), inline=True)
+    final_embed.add_field(name="✅ Insérées", value=str(inserted), inline=True)
+    final_embed.add_field(name="⚠️ Doublons", value=str(duplicates), inline=True)
+    final_embed.add_field(name="📁 Catégorie", value=category, inline=False)
     
-    status_msg = await ctx.send(embed=recap_embed)
-    
-    # ---- LANCER LE SCRAPING ----
-    try:
-        scraped_urls = await scrape_pinterest(pinterest_url, count)
-        
-        if not scraped_urls:
-            return await status_msg.edit(content="❌ Aucune image trouvée.")
-        
-        # ---- INSERTION EN DB ----
-        conn = db_connect()
-        if not conn:
-            return await status_msg.edit(content="❌ Erreur de connexion DB.")
-        
-        cur = conn.cursor()
-        inserted = 0
-        
-        for img_url in scraped_urls:
-            try:
-                cur.execute(
-                    "INSERT INTO images (url, category, used) VALUES (%s, %s, FALSE) ON CONFLICT DO NOTHING",
-                    (img_url, category)
-                )
-                if cur.rowcount > 0:
-                    inserted += 1
-            except Exception as e:
-                logging.error(f"Erreur insertion: {e}")
-        
-        conn.commit()
-        cur.close()
-        conn.close()
-        
-        # ---- RÉSULTAT FINAL ----
-        final_embed = discord.Embed(
-            title="✅ Import terminé !",
-            color=0x2ecc71
-        )
-        final_embed.add_field(name="Trouvées", value=str(len(scraped_urls)), inline=True)
-        final_embed.add_field(name="Insérées", value=str(inserted), inline=True)
-        final_embed.add_field(name="Catégorie", value=category, inline=True)
-        
-        await status_msg.edit(embed=final_embed)
-        
-    except Exception as e:
-        logging.error(f"Erreur scraping: {e}")
-        await status_msg.edit(content=f"❌ Erreur: {str(e)}")
+    await status_msg.edit(content=None, embed=final_embed)
 
 # ----------------------
 # COMMANDE !STOCK
