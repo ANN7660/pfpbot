@@ -411,7 +411,7 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 @bot.event
 async def on_ready():
     logger.info(f'Bot connecté: {bot.user} — guilds: {len(bot.guilds)}')
-    await bot.change_presence(activity=discord.Game(name="!help"))
+    await bot.change_presence(activity=discord.Game(name="!help | !pdp"))
 
 @bot.command(name='pdp')
 async def pdp(ctx, category: str = None, count: int = 15):
@@ -489,6 +489,100 @@ async def pdp(ctx, category: str = None, count: int = 15):
     
     cur.close()
     return_db_connection(conn)
+
+@bot.command(name='banner')
+async def banner(ctx, count: int = 15):
+    """Envoie des banners Discord"""
+    await pdp(ctx, 'banner', count)
+
+@bot.command(name='stock')
+async def stock(ctx):
+    """Affiche le stock disponible par catégorie"""
+    conn = get_db_connection()
+    if not conn:
+        await ctx.send("❌ Erreur de connexion à la base de données")
+        return
+    
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT category, COUNT(*) as total 
+        FROM images 
+        WHERE status = 'pending'
+        GROUP BY category
+        ORDER BY category
+    """)
+    
+    rows = cur.fetchall()
+    cur.close()
+    return_db_connection(conn)
+    
+    if not rows:
+        await ctx.send("📦 Aucun stock disponible")
+        return
+    
+    # Créer l'embed
+    embed = discord.Embed(
+        title="📦 Stock Disponible",
+        description="Nombre d'images disponibles par catégorie",
+        color=discord.Color.blue()
+    )
+    
+    total = 0
+    for row in rows:
+        category_icons = {
+            'boy': '👦',
+            'girl': '👧',
+            'banner': '🎨',
+            'anime': '🎌',
+            'aesthetic': '✨',
+            'cute': '🥰'
+        }
+        icon = category_icons.get(row['category'], '📸')
+        embed.add_field(
+            name=f"{icon} {row['category'].capitalize()}",
+            value=f"**{row['total']}** images",
+            inline=True
+        )
+        total += row['total']
+    
+    embed.set_footer(text=f"Total: {total} images disponibles")
+    await ctx.send(embed=embed)
+
+@bot.command(name='help')
+async def help_command(ctx):
+    """Affiche l'aide du bot"""
+    embed = discord.Embed(
+        title="🤖 Bot Discord PFP - Aide",
+        description="Bot de distribution de photos de profil et banners",
+        color=discord.Color.purple()
+    )
+    
+    embed.add_field(
+        name="📸 !pdp <catégorie> [nombre]",
+        value="Envoie des photos de profil\nExemple: `!pdp boy 20`\nCatégories: anime, boy, girl, aesthetic, cute, banner",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🎨 !banner [nombre]",
+        value="Envoie des banners Discord\nExemple: `!banner 10`",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📦 !stock",
+        value="Affiche le stock disponible par catégorie",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="ℹ️ !help",
+        value="Affiche ce message d'aide",
+        inline=False
+    )
+    
+    embed.set_footer(text="Par défaut: 15 images | Maximum: 50 images par commande")
+    await ctx.send(embed=embed)
 
 # Flask in thread + run bot
 def run_flask():
