@@ -86,55 +86,75 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 # ----------------------
 async def scrape_pinterest(url, count):
     """
-    Scrape Pinterest via JSON embarqué (fonctionne sur Render)
+    Scrape Pinterest avec headers avancés et parsing HTML
     """
     try:
-        # Ajouter .json pour récupérer les données
-        if "/pin/" in url:
-            # URL d'un pin individuel
-            json_url = url.rstrip('/') + ".json"
-        elif "/board/" in url or url.count('/') >= 4:
-            # URL d'un board
-            json_url = url.rstrip('/') + ".json"
-        else:
-            # URL de profil
-            parsed = urlparse(url)
-            path = parsed.path.rstrip('/')
-            json_url = f"https://www.pinterest.com{path}.json"
-        
+        # Headers plus complets pour éviter le blocage
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0',
         }
+        
+        # Nettoyer l'URL
+        clean_url = url.rstrip('/')
         
         # Requête asynchrone
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
-            lambda: requests.get(json_url, headers=headers, timeout=15)
+            lambda: requests.get(clean_url, headers=headers, timeout=20, allow_redirects=True)
         )
         
         if response.status_code != 200:
-            logging.error(f"Erreur Pinterest: {response.status_code}")
+            logging.error(f"Erreur Pinterest: Status {response.status_code}")
             return []
         
-        data = response.json()
+        # Chercher les URLs d'images dans le HTML
+        html_content = response.text
         image_urls = []
         
-        # Extraire les images selon le type de page
-        if "resource_response" in data:
-            pins = data["resource_response"]["data"]
-            if isinstance(pins, list):
-                for pin in pins[:count]:
-                    if "images" in pin and "orig" in pin["images"]:
-                        image_urls.append(pin["images"]["orig"]["url"])
-            elif isinstance(pins, dict) and "pins" in pins:
-                for pin in pins["pins"][:count]:
-                    if "images" in pin and "orig" in pin["images"]:
-                        image_urls.append(pin["images"]["orig"]["url"])
+        # Pattern pour trouver les URLs Pinterest d'images
+        patterns = [
+            r'"url":"(https://i\.pinimg\.com/originals/[^"]+)"',
+            r'"url":"(https://i\.pinimg\.com/736x/[^"]+)"',
+            r'https://i\.pinimg\.com/originals/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]+\.(jpg|png|jpeg)',
+            r'https://i\.pinimg\.com/736x/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]+\.(jpg|png|jpeg)',
+        ]
         
+        for pattern in patterns:
+            matches = re.findall(pattern, html_content)
+            for match in matches:
+                if isinstance(match, tuple):
+                    img_url = match[0]
+                else:
+                    img_url = match
+                
+                # Nettoyer l'URL si elle contient des échappements
+                img_url = img_url.replace('\\/', '/')
+                
+                if img_url not in image_urls:
+                    image_urls.append(img_url)
+                
+                if len(image_urls) >= count:
+                    break
+            
+            if len(image_urls) >= count:
+                break
+        
+        logging.info(f"Trouvé {len(image_urls)} images sur Pinterest")
         return image_urls[:count]
         
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Erreur réseau Pinterest: {e}")
+        return []
     except Exception as e:
         logging.error(f"Erreur scraping Pinterest: {e}")
         return []
