@@ -1,41 +1,4 @@
-# ----------------------
-# COMMANDE !TEST (DEBUG)
-# ----------------------
-@bot.command(name="test")
-async def test_cmd(ctx):
-    """Commande de test pour vérifier la détection d'URLs"""
-    
-    embed = discord.Embed(
-        title="🧪 Test de détection d'URLs",
-        description="Collez vos URLs pour tester la détection",
-        color=0x9b59b6
-    )
-    await ctx.send(embed=embed)
-    
-    def check(m):
-        return m.author == ctx.author and m.channel == ctx.channel
-    
-    try:
-        msg = await bot.wait_for("message", timeout=60, check=check)
-        content = msg.content
-        
-        # Afficher le contenu brut
-        await ctx.send(f"**Contenu reçu ({len(content)} caractères):**\n```{content[:500]}```")
-        
-        # Tester la détection
-        url_pattern = r'https?://[^\s<>"\'\)]+(?:\.jpg|\.jpeg|\.png|\.gif|\.webp)?'
-        urls = re.findall(url_pattern, content, re.IGNORECASE)
-        
-        if urls:
-            result = "\n".join([f"{i+1}. {url}" for i, url in enumerate(urls)])
-            await ctx.send(f"**URLs détectées ({len(urls)}):**\n```{result[:1500]}```")
-        else:
-            await ctx.send("❌ Aucune URL détectée")
-            
-    except asyncio.TimeoutError:
-        await ctx.send("⏱️ Temps écoulé.")
-
-# pdp.py — Version complète avec toutes les fonctionnalités
+# pdp.py — Version finale complète
 
 import os
 import asyncio
@@ -120,6 +83,14 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
 # ----------------------
+# EVENT READY
+# ----------------------
+@bot.event
+async def on_ready():
+    logging.info(f"Bot connecté : {bot.user}")
+    await bot.change_presence(activity=discord.Game(name="!help pour les commandes"))
+
+# ----------------------
 # COMMANDE !HELP
 # ----------------------
 @bot.command(name="help")
@@ -145,12 +116,54 @@ async def help_cmd(ctx):
         inline=False
     )
     embed.add_field(
+        name="🧪 !test",
+        value="Tester la détection d'URLs (debug)",
+        inline=False
+    )
+    embed.add_field(
         name="❓ !help",
         value="Afficher ce message",
         inline=False
     )
     embed.set_footer(text="Bot Pinterest • Import manuel (Pinterest bloque le scraping auto)")
     await ctx.send(embed=embed)
+
+# ----------------------
+# COMMANDE !TEST (DEBUG)
+# ----------------------
+@bot.command(name="test")
+async def test_cmd(ctx):
+    """Commande de test pour vérifier la détection d'URLs"""
+    
+    embed = discord.Embed(
+        title="🧪 Test de détection d'URLs",
+        description="Collez vos URLs pour tester la détection",
+        color=0x9b59b6
+    )
+    await ctx.send(embed=embed)
+    
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel
+    
+    try:
+        msg = await bot.wait_for("message", timeout=60, check=check)
+        content = msg.content
+        
+        # Afficher le contenu brut
+        await ctx.send(f"**Contenu reçu ({len(content)} caractères):**\n```{content[:500]}```")
+        
+        # Tester la détection
+        url_pattern = r'https?://[^\s<>"\'\)]+(?:\.jpg|\.jpeg|\.png|\.gif|\.webp)?'
+        urls = re.findall(url_pattern, content, re.IGNORECASE)
+        
+        if urls:
+            result = "\n".join([f"{i+1}. {url}" for i, url in enumerate(urls)])
+            await ctx.send(f"**URLs détectées ({len(urls)}):**\n```{result[:1500]}```")
+        else:
+            await ctx.send("❌ Aucune URL détectée")
+            
+    except asyncio.TimeoutError:
+        await ctx.send("⏱️ Temps écoulé.")
 
 # ----------------------
 # COMMANDE !PDP
@@ -351,7 +364,6 @@ async def url_cmd(ctx):
             count = max(1, min(count, len(image_urls)))
         
         # Sélectionner aléatoirement si moins que le total
-        import random
         if count < len(image_urls):
             selected_urls = random.sample(image_urls, count)
         else:
@@ -443,14 +455,6 @@ async def stock_cmd(ctx):
     
     embed.set_footer(text="Utilisez !pdp pour récupérer des images")
     await ctx.send(embed=embed)
-
-# ----------------------
-# EVENT READY
-# ----------------------
-@bot.event
-async def on_ready():
-    logging.info(f"Bot connecté : {bot.user}")
-    await bot.change_presence(activity=discord.Game(name="!help pour les commandes"))
 
 # ----------------------
 # RUN
