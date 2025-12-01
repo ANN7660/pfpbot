@@ -1,4 +1,3 @@
-# main.py
 import os
 import logging
 from threading import Thread
@@ -10,593 +9,450 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from flask_sock import Sock
-from dotenv import load_dotenv
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from psycopg2 import pool
-
 import discord
 from discord.ext import commands
+from discord import app_commands
+from dotenv import load_dotenv
+import psycopg2
+from psycopg2 import pool
 
-# Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Configuration du logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
-# load env
+# Charger les variables d'environnement
 load_dotenv()
+
 TOKEN = os.getenv('DISCORD_TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
 WEBHOOK_URL = os.getenv('DISCORD_WEBHOOK_URL')
 
-if not TOKEN:
-    logger.error("DISCORD_TOKEN manquant")
-    raise SystemExit(1)
-if not DATABASE_URL:
-    logger.error("DATABASE_URL manquant")
-    raise SystemExit(1)
-
-# DB pool
-try:
-    url = urlparse(DATABASE_URL)
-    connection_pool = psycopg2.pool.SimpleConnectionPool(
-        1, 10,
-        host=url.hostname,
-        port=url.port or 5432,
-        database=url.path[1:],
-        user=url.username,
-        password=url.password,
-        sslmode='require' if url.hostname and 'render' in url.hostname else 'prefer'
-    )
-    logger.info("Pool PostgreSQL initialisé")
-except Exception as e:
-    logger.exception("Erreur initialisation pool DB")
-    connection_pool = None
-
-def get_db_connection():
-    try:
-        if connection_pool:
-            return connection_pool.getconn()
-        else:
-            return psycopg2.connect(DATABASE_URL)
-    except Exception as e:
-        logger.error("Erreur connexion DB: %s", e)
-        return None
-
-def return_db_connection(conn):
-    try:
-        if connection_pool and conn:
-            connection_pool.putconn(conn)
-        elif conn:
-            conn.close()
-    except Exception as e:
-        logger.error("Erreur retour connexion: %s", e)
-
-# Flask
-app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
-sock = Sock(app)
-
-# Store WebSocket connections
-ws_clients = []
-
-@sock.route('/ws')
-def websocket_handler(ws):
-    """WebSocket endpoint for real-time updates"""
-    ws_clients.append(ws)
-    logger.info("Client WebSocket connecté")
-    try:
-        while True:
-            data = ws.receive()
-            if data:
-                logger.info(f"WS reçu: {data}")
-    except Exception as e:
-        logger.info("Client WebSocket déconnecté")
-    finally:
-        if ws in ws_clients:
-            ws_clients.remove(ws)
-
-def broadcast_ws(message):
-    """Envoie un message à tous les clients WebSocket"""
-    import json
-    dead_clients = []
-    for ws in ws_clients:
-        try:
-            ws.send(json.dumps(message))
-        except:
-            dead_clients.append(ws)
-    for ws in dead_clients:
-        if ws in ws_clients:
-            ws_clients.remove(ws)
-
-@app.route('/', methods=['GET'])
-def index():
-    info = {
-        "bot": bot.user.name if bot and bot.is_ready() else None,
-        "guilds": len(bot.guilds) if bot and bot.is_ready() else 0,
-        "status": "online" if bot and bot.is_ready() else "starting",
-        "users": len(bot.users) if bot and bot.is_ready() else 0
-    }
-    return jsonify(info)
-
-@app.route('/health', methods=['GET'])
-def health():
-    is_ready = bot.is_ready()
-    return jsonify({"bot_ready": is_ready, "status": ("ok" if is_ready else "starting")}), (200 if is_ready else 503)
-
-# ✅ ENDPOINT MANQUANT: /status
-@app.route('/status', methods=['GET'])
-def status():
-    """Status du bot pour le panel"""
-    return jsonify({
-        "status": "online" if bot and bot.is_ready() else "offline",
-        "bot_name": bot.user.name if bot and bot.is_ready() else None,
-        "guilds": len(bot.guilds) if bot and bot.is_ready() else 0,
-        "users": len(bot.users) if bot and bot.is_ready() else 0
-    })
-
-@app.route('/stats', methods=['GET'])
-def stats_api():
-    try:
-        conn = get_db_connection()
-        if not conn:
-            return jsonify({"error": "DB connection failed"}), 500
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # Total photos
-        cur.execute("SELECT COUNT(*) as count FROM images")
-        total_photos = cur.fetchone()['count']
-        
-        # Total imports (groupés par scrape session)
-        cur.execute("SELECT COUNT(DISTINCT category) as count FROM images")
-        total_imports = cur.fetchone()['count']
-        
-        # Photos aujourd'hui
-        cur.execute("SELECT COUNT(*) as count FROM images WHERE DATE(created_at) = CURRENT_DATE")
-        today_photos = cur.fetchone()['count']
-        
-        # Dernière activité
-        cur.execute("SELECT MAX(created_at) as last FROM images")
-        last = cur.fetchone()['last']
-        last_activity = last.strftime("%d/%m/%Y %H:%M") if last else "Jamais"
-        
-        # Stock par catégorie
-        cur.execute("SELECT category, COUNT(*) as count FROM images WHERE status='pending' GROUP BY category")
-        stock = {r['category']: r['count'] for r in cur.fetchall()}
-        
-        cur.close()
-        return_db_connection(conn)
-        
-        return jsonify({
-            "total_photos": total_photos,
-            "total_imports": total_imports,
-            "today_photos": today_photos,
-            "last_activity": last_activity,
-            "stock": stock,
-            "guilds": len(bot.guilds) if bot and bot.is_ready() else 0,
-            "users": len(bot.users) if bot and bot.is_ready() else 0
-        })
-    except Exception as e:
-        logger.exception("Erreur /stats")
-        return jsonify({"error": str(e)}), 500
-
-# ✅ ENDPOINT MANQUANT: /photos
-@app.route('/photos', methods=['GET'])
-def get_photos():
-    """Récupère les photos pour la galerie"""
-    try:
-        category = request.args.get('category', 'all')
-        limit = int(request.args.get('limit', 100))
-        
-        conn = get_db_connection()
-        if not conn:
-            return jsonify({"error": "DB connection failed"}), 500
-        
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        if category == 'all':
-            cur.execute("SELECT id, image_url, category, status FROM images ORDER BY created_at DESC LIMIT %s", (limit,))
-        else:
-            cur.execute("SELECT id, image_url, category, status FROM images WHERE category = %s ORDER BY created_at DESC LIMIT %s", (category, limit))
-        
-        photos = []
-        for row in cur.fetchall():
-            photos.append({
-                "id": row['id'],
-                "url": row['image_url'],
-                "category": row['category'],
-                "status": row['status']
-            })
-        
-        cur.close()
-        return_db_connection(conn)
-        
-        return jsonify({"photos": photos, "count": len(photos)})
-    except Exception as e:
-        logger.exception("Erreur /photos")
-        return jsonify({"error": str(e)}), 500
-
-# ✅ ENDPOINT MANQUANT: /history
-@app.route('/history', methods=['GET'])
-def get_history():
-    """Récupère l'historique des imports"""
-    try:
-        conn = get_db_connection()
-        if not conn:
-            return jsonify({"error": "DB connection failed"}), 500
-        
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # Grouper les imports par catégorie et date
-        cur.execute("""
-            SELECT 
-                category,
-                COUNT(*) as photo_count,
-                MIN(created_at) as date,
-                'success' as status,
-                'Pinterest' as source
-            FROM images
-            GROUP BY category, DATE(created_at)
-            ORDER BY MIN(created_at) DESC
-            LIMIT 50
-        """)
-        
-        history = []
-        for row in cur.fetchall():
-            history.append({
-                "category": row['category'],
-                "photo_count": row['photo_count'],
-                "date": row['date'].isoformat() if row['date'] else None,
-                "status": row['status'],
-                "source": row['source'],
-                "duration": "N/A"
-            })
-        
-        cur.close()
-        return_db_connection(conn)
-        
-        return jsonify({"history": history})
-    except Exception as e:
-        logger.exception("Erreur /history")
-        return jsonify({"error": str(e)}), 500
-
-# Scraping implementation
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)"
-                  " Chrome/115.0.0.0 Safari/537.36"
+# Webhooks par catégorie (optionnel)
+WEBHOOKS = {
+    'boy': os.getenv('WEBHOOK_BOY', WEBHOOK_URL),
+    'girl': os.getenv('WEBHOOK_GIRL', WEBHOOK_URL),
+    'banner': os.getenv('WEBHOOK_BANNER', WEBHOOK_URL),
+    'match': os.getenv('WEBHOOK_MATCH', WEBHOOK_URL),
+    'anime': os.getenv('WEBHOOK_ANIME', WEBHOOK_URL),
+    'aesthetic': os.getenv('WEBHOOK_AESTHETIC', WEBHOOK_URL),
+    'cute': os.getenv('WEBHOOK_CUTE', WEBHOOK_URL),
 }
 
-def extract_image_urls_from_html(html, base_url=None, limit=200):
-    """Retourne une liste d'URLs d'images depuis le HTML"""
-    urls = []
-    soup = BeautifulSoup(html, 'html.parser')
+# Pool de connexions PostgreSQL
+try:
+    connection_pool = psycopg2.pool.SimpleConnectionPool(1, 10, DATABASE_URL)
+    logging.info("Pool PostgreSQL initialisé")
+except Exception as e:
+    logging.error(f"Erreur pool PostgreSQL: {e}")
+    connection_pool = None
 
-    # Méthode 1: chercher les balises meta og:image / twitter:image
-    meta_og = soup.find_all('meta', {"property": "og:image"})
-    for m in meta_og:
-        v = m.get('content')
-        if v and v not in urls:
-            urls.append(v)
-            if len(urls) >= limit: return urls
-
-    # Method 2: images <img>
-    for img in soup.find_all('img'):
-        src = img.get('src') or img.get('data-src') or img.get('data-image-src') or img.get('srcset')
-        if not src: continue
-        if src and ',' in src:
-            src = src.split(',')[0].strip().split(' ')[0]
-        if src and src not in urls:
-            urls.append(src)
-            if len(urls) >= limit: return urls
-
-    # Method 3: chercher URLs complètes dans le HTML (regex)
-    import re
-    found = re.findall(r'https?://i\.pinimg\.com/[^"\']+', html)
-    for u in found:
-        if u not in urls:
-            urls.append(u)
-            if len(urls) >= limit: return urls
-
-    return urls
-
-def scrape_pinterest(url, limit=200, timeout=10):
-    """Lit une page pinterest et retourne liste d'URLs d'images (max limit)."""
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=timeout)
-        r.raise_for_status()
-        html = r.text
-        urls = extract_image_urls_from_html(html, base_url=url, limit=limit)
-        clean = []
-        for u in urls:
-            if u.startswith('//'):
-                u = 'https:' + u
-            if u not in clean:
-                clean.append(u)
-            if len(clean) >= limit: break
-        return clean
-    except Exception as e:
-        logger.exception("Erreur scrapping Pinterest: %s", e)
-        return []
-
-@app.route('/scrape', methods=['POST'])
-def scrape_endpoint():
-    """
-    POST /scrape
-    body: { "pinterest_link": "...", "category": "anime", "photo_count": 50 }
-    """
-    data = request.get_json(force=True, silent=True) or {}
-    url = data.get('pinterest_link') or data.get('url') or request.form.get('url')
-    category = (data.get('category') or request.form.get('category') or 'uncategorized').strip()
-    try:
-        limit = int(data.get('photo_count') or data.get('limit') or request.form.get('limit') or 50)
-    except:
-        limit = 50
-    
-    if not url:
-        return jsonify({"error": "URL manquante"}), 400
-
-    logger.info("Scraping demandé: %s (cat=%s limit=%d)", url, category, limit)
-    
-    # Notifier le début via WebSocket
-    broadcast_ws({"type": "info", "message": f"Démarrage du scraping {category}..."})
-    
-    # Scraper
-    found = scrape_pinterest(url, limit=limit)
-    if not found:
-        broadcast_ws({"type": "error", "message": "Aucune image trouvée"})
-        return jsonify({"inserted": 0, "found": 0, "message": "Aucune image trouvée"}), 200
-
-    # Insert into DB
-    conn = get_db_connection()
-    if not conn:
-        broadcast_ws({"type": "error", "message": "Erreur DB"})
-        return jsonify({"error": "DB connection failed"}), 500
-    
-    cur = conn.cursor()
-    inserted = 0
-    try:
-        for i, img_url in enumerate(found):
-            cur.execute("SELECT id FROM images WHERE image_url = %s", (img_url,))
-            if cur.fetchone():
-                continue
-            cur.execute(
-                "INSERT INTO images (image_url, category, status) VALUES (%s,%s,%s) RETURNING id",
-                (img_url, category, 'pending')
-            )
-            inserted += 1
-            
-            # Envoyer progression via WebSocket
-            if inserted % 10 == 0 or inserted == len(found):
-                broadcast_ws({
-                    "type": "progress",
-                    "current": inserted,
-                    "total": limit,
-                    "speed": round(inserted / ((i+1)/10), 1)
-                })
-            
-            if inserted >= limit:
-                break
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        logger.exception("Erreur insertion images")
-        broadcast_ws({"type": "error", "message": f"Erreur: {str(e)}"})
-    finally:
-        cur.close()
-        return_db_connection(conn)
-
-    logger.info("Scrape terminé: %d insérées", inserted)
-    
-    # Notifier la fin
-    broadcast_ws({
-        "type": "complete",
-        "total": inserted,
-        "message": f"{inserted} photos scrapées avec succès"
-    })
-    
-    return jsonify({
-        "inserted": inserted,
-        "found": len(found),
-        "import_id": f"import_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    }), 200
-
-# Discord bot setup
+# Configuration Discord Bot
 intents = discord.Intents.default()
 intents.message_content = True
-intents.guilds = True
-intents.members = True
+intents.messages = True
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+# Flask API
+app = Flask(__name__)
+CORS(app)
 
-@bot.event
-async def on_ready():
-    logger.info(f'Bot connecté: {bot.user} — guilds: {len(bot.guilds)}')
-    await bot.change_presence(activity=discord.Game(name="!help | !pdp"))
+# Catégories valides
+CATEGORIES = ['anime', 'boy', 'girl', 'aesthetic', 'cute', 'banner', 'match']
 
-@bot.command(name='pdp')
-async def pdp(ctx, category: str = None, count: int = 15):
-    """
-    Commande pour envoyer des photos de profil
-    Usage: !pdp <catégorie> [nombre]
-    Exemple: !pdp boy 20
-    """
-    if not category:
-        await ctx.send("❌ Spécifiez une catégorie: `!pdp <catégorie> [nombre]`\nExemple: `!pdp boy 20`")
-        return
-    
-    # Limiter le nombre entre 1 et 50
-    if count < 1:
-        count = 1
-    elif count > 50:
-        await ctx.send(f"⚠️ Maximum 50 photos par commande. Je vais envoyer 50 photos.")
-        count = 50
-    
+# ============================================================================
+# FONCTIONS DATABASE
+# ============================================================================
+
+def get_db_connection():
+    """Récupérer une connexion depuis le pool"""
+    if connection_pool:
+        return connection_pool.getconn()
+    return None
+
+def release_db_connection(conn):
+    """Libérer une connexion vers le pool"""
+    if connection_pool and conn:
+        connection_pool.putconn(conn)
+
+def insert_image(category, url):
+    """Insérer une image dans la base de données"""
     conn = get_db_connection()
     if not conn:
-        await ctx.send("❌ Erreur de connexion à la base de données")
+        return False
+    
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO images (category, url) VALUES (%s, %s) ON CONFLICT (url) DO NOTHING RETURNING id",
+                (category, url)
+            )
+            result = cursor.fetchone()
+            conn.commit()
+            return result is not None
+    except Exception as e:
+        logging.error(f"Erreur insertion image: {e}")
+        conn.rollback()
+        return False
+    finally:
+        release_db_connection(conn)
+
+def get_random_images(category, count=1):
+    """Récupérer des images aléatoires"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT url FROM images WHERE category = %s AND used = FALSE ORDER BY RANDOM() LIMIT %s",
+                (category, count)
+            )
+            results = cursor.fetchall()
+            
+            if results:
+                urls = [row[0] for row in results]
+                cursor.execute(
+                    "UPDATE images SET used = TRUE WHERE url = ANY(%s)",
+                    (urls,)
+                )
+                conn.commit()
+                return urls
+            return []
+    except Exception as e:
+        logging.error(f"Erreur récupération images: {e}")
+        return []
+    finally:
+        release_db_connection(conn)
+
+def get_stock():
+    """Récupérer le stock par catégorie"""
+    conn = get_db_connection()
+    if not conn:
+        return {}
+    
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT category, COUNT(*) FROM images WHERE used = FALSE GROUP BY category"
+            )
+            results = cursor.fetchall()
+            return {row[0]: row[1] for row in results}
+    except Exception as e:
+        logging.error(f"Erreur récupération stock: {e}")
+        return {}
+    finally:
+        release_db_connection(conn)
+
+# ============================================================================
+# SCRAPING PINTEREST
+# ============================================================================
+
+def scrape_pinterest(url, max_images=50):
+    """Scrapper des images depuis Pinterest"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        images = []
+        
+        # Rechercher les images Pinterest
+        for img in soup.find_all('img'):
+            src = img.get('src') or img.get('data-src')
+            if src and 'pinimg.com' in src and '236x' in src:
+                # Remplacer par la version haute qualité
+                high_res = src.replace('236x', '736x')
+                if high_res not in images:
+                    images.append(high_res)
+                    if len(images) >= max_images:
+                        break
+        
+        logging.info(f"Trouvé {len(images)} images sur {url}")
+        return images
+    except Exception as e:
+        logging.error(f"Erreur scraping: {e}")
+        return []
+
+# ============================================================================
+# WEBHOOK NOTIFICATIONS
+# ============================================================================
+
+def send_webhook_notification(category, imported, duplicates, source_url):
+    """Envoyer une notification webhook"""
+    webhook_url = WEBHOOKS.get(category, WEBHOOK_URL)
+    if not webhook_url:
         return
     
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        embed = {
+            "title": "✅ Import terminé",
+            "color": 0x00ff00,
+            "fields": [
+                {"name": "📂 Catégorie", "value": category, "inline": True},
+                {"name": "✅ Importées", "value": str(imported), "inline": True},
+                {"name": "⚠️ Doublons", "value": str(duplicates), "inline": True},
+                {"name": "🔗 Source", "value": source_url, "inline": False},
+            ],
+            "timestamp": datetime.utcnow().isoformat(),
+            "footer": {"text": "PFP Bot Import System"}
+        }
+        
+        data = {"embeds": [embed]}
+        requests.post(webhook_url, json=data, timeout=5)
+    except Exception as e:
+        logging.error(f"Erreur webhook: {e}")
+
+# ============================================================================
+# COMMANDE !urlpdp (INTERACTIVE)
+# ============================================================================
+
+class URLPDPView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+        self.url = None
+        self.category = None
+        self.max_images = 50
     
-    # Vérifier le stock disponible
-    cur.execute("SELECT COUNT(*) as total FROM images WHERE category = %s AND status = 'pending'", (category,))
-    stock = cur.fetchone()['total']
+    @discord.ui.button(label="📝 Entrer l'URL", style=discord.ButtonStyle.primary)
+    async def url_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = URLModal()
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+        
+        if modal.url:
+            self.url = modal.url
+            await interaction.followup.send(f"✅ URL enregistrée: {self.url}", ephemeral=True)
     
-    if stock == 0:
-        await ctx.send(f"❌ Aucune image disponible pour la catégorie `{category}`")
-        return_db_connection(conn)
-        return
+    @discord.ui.select(
+        placeholder="📂 Choisir une catégorie",
+        options=[
+            discord.SelectOption(label="Boy", value="boy", emoji="👦"),
+            discord.SelectOption(label="Girl", value="girl", emoji="👧"),
+            discord.SelectOption(label="Anime", value="anime", emoji="🎌"),
+            discord.SelectOption(label="Aesthetic", value="aesthetic", emoji="🌸"),
+            discord.SelectOption(label="Cute", value="cute", emoji="🥰"),
+            discord.SelectOption(label="Banner", value="banner", emoji="🎨"),
+            discord.SelectOption(label="Match", value="match", emoji="💑"),
+        ]
+    )
+    async def category_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        self.category = select.values[0]
+        await interaction.response.send_message(f"✅ Catégorie: **{self.category}**", ephemeral=True)
     
-    if stock < count:
-        await ctx.send(f"⚠️ Seulement {stock} images disponibles pour `{category}`. Je vais les envoyer toutes.")
-        count = stock
+    @discord.ui.button(label="🔢 Nombre de photos", style=discord.ButtonStyle.secondary)
+    async def count_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = CountModal()
+        await interaction.response.send_modal(modal)
+        await modal.wait()
+        
+        if modal.count:
+            self.max_images = modal.count
+            await interaction.followup.send(f"✅ Nombre: {self.max_images} photos", ephemeral=True)
     
-    # Récupérer les images
-    cur.execute("""
-        SELECT id, image_url FROM images
-        WHERE category = %s AND status = 'pending'
-        ORDER BY RANDOM()
-        LIMIT %s
-    """, (category, count))
+    @discord.ui.button(label="✅ Lancer l'import", style=discord.ButtonStyle.success)
+    async def import_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.url:
+            await interaction.response.send_message("❌ Aucune URL définie !", ephemeral=True)
+            return
+        
+        if not self.category:
+            await interaction.response.send_message("❌ Aucune catégorie choisie !", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        # Scraping
+        start_time = datetime.now()
+        images = scrape_pinterest(self.url, self.max_images)
+        
+        if not images:
+            embed = discord.Embed(
+                title="❌ Échec de l'import",
+                description="Aucune image trouvée sur cette URL.",
+                color=0xff0000
+            )
+            await interaction.followup.send(embed=embed)
+            return
+        
+        # Import dans la DB
+        inserted = 0
+        duplicates = 0
+        
+        for img_url in images:
+            if insert_image(self.category, img_url):
+                inserted += 1
+            else:
+                duplicates += 1
+        
+        duration = (datetime.now() - start_time).total_seconds()
+        
+        # Notification webhook
+        send_webhook_notification(self.category, inserted, duplicates, self.url)
+        
+        # Embed de succès
+        embed = discord.Embed(
+            title="✅ Import terminé !",
+            color=0x00ff00,
+            timestamp=datetime.utcnow()
+        )
+        embed.add_field(name="🔍 Trouvées", value=str(len(images)), inline=True)
+        embed.add_field(name="✅ Importées", value=str(inserted), inline=True)
+        embed.add_field(name="⚠️ Doublons", value=str(duplicates), inline=True)
+        embed.add_field(name="📂 Catégorie", value=self.category, inline=True)
+        embed.add_field(name="⏱️ Durée", value=f"{duration:.1f}s", inline=True)
+        embed.set_footer(text=f"Demandé par {interaction.user.name}")
+        
+        await interaction.followup.send(embed=embed)
+
+class URLModal(discord.ui.Modal, title="Entrer l'URL Pinterest"):
+    url_input = discord.ui.TextInput(
+        label="URL Pinterest",
+        placeholder="https://www.pinterest.com/...",
+        required=True,
+        max_length=500
+    )
     
-    rows = cur.fetchall()
+    async def on_submit(self, interaction: discord.Interaction):
+        self.url = self.url_input.value
+        await interaction.response.send_message("✅ URL enregistrée !", ephemeral=True)
+
+class CountModal(discord.ui.Modal, title="Nombre de photos"):
+    count_input = discord.ui.TextInput(
+        label="Nombre (max 200)",
+        placeholder="50",
+        required=True,
+        max_length=3
+    )
     
-    if not rows:
-        await ctx.send(f"❌ Aucune image disponible pour `{category}`")
-        return_db_connection(conn)
-        return
-    
-    # Message de confirmation
-    await ctx.send(f"📸 Envoi de **{len(rows)} photos** de la catégorie `{category}`...")
-    
-    # Envoyer les images
-    sent_count = 0
-    for r in rows:
+    async def on_submit(self, interaction: discord.Interaction):
         try:
-            await ctx.send(r['image_url'])
-            sent_count += 1
-        except Exception as e:
-            logger.error(f"Erreur envoi image {r['id']}: {e}")
+            self.count = min(int(self.count_input.value), 200)
+            await interaction.response.send_message(f"✅ Nombre défini: {self.count}", ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("❌ Nombre invalide !", ephemeral=True)
+            self.count = 50
+
+@bot.command(name='urlpdp')
+async def urlpdp(ctx):
+    """Interface interactive pour importer des photos"""
+    embed = discord.Embed(
+        title="📥 Import de photos Pinterest",
+        description="Utilisez les boutons ci-dessous pour configurer votre import :",
+        color=0x7c3aed
+    )
+    embed.add_field(name="1️⃣", value="Cliquez sur **📝 Entrer l'URL**", inline=False)
+    embed.add_field(name="2️⃣", value="Choisissez la **catégorie**", inline=False)
+    embed.add_field(name="3️⃣", value="(Optionnel) Définir le **nombre**", inline=False)
+    embed.add_field(name="4️⃣", value="Cliquez sur **✅ Lancer l'import**", inline=False)
     
-    # Marquer comme envoyées
-    ids = [r['id'] for r in rows]
-    cur.execute("UPDATE images SET status='sent', sent_at=now() WHERE id = ANY(%s)", (ids,))
-    conn.commit()
+    view = URLPDPView()
+    await ctx.send(embed=embed, view=view)
+
+# ============================================================================
+# COMMANDES DISCORD CLASSIQUES
+# ============================================================================
+
+@bot.command(name='pdp')
+async def pdp(ctx, category: str = None, count: int = 1):
+    """Envoyer des photos de profil"""
+    if not category or category.lower() not in CATEGORIES:
+        await ctx.send(f"❌ Catégorie invalide ! Utilisez: {', '.join(CATEGORIES)}")
+        return
     
-    # Message de fin
-    remaining = stock - sent_count
-    await ctx.send(f"✅ **{sent_count} photos** envoyées ! Il reste **{remaining} photos** dans le stock `{category}`.")
+    category = category.lower()
+    count = min(max(count, 1), 10)
     
-    cur.close()
-    return_db_connection(conn)
+    images = get_random_images(category, count)
+    
+    if not images:
+        await ctx.send(f"❌ Aucune image disponible pour **{category}** !")
+        return
+    
+    for img_url in images:
+        await ctx.send(img_url)
 
 @bot.command(name='banner')
-async def banner(ctx, count: int = 15):
-    """Envoie des banners Discord"""
-    await pdp(ctx, 'banner', count)
+async def banner(ctx, count: int = 1):
+    """Envoyer des bannières"""
+    count = min(max(count, 1), 5)
+    images = get_random_images('banner', count)
+    
+    if not images:
+        await ctx.send("❌ Aucune bannière disponible !")
+        return
+    
+    for img_url in images:
+        await ctx.send(img_url)
 
 @bot.command(name='stock')
 async def stock(ctx):
-    """Affiche le stock disponible par catégorie"""
-    conn = get_db_connection()
-    if not conn:
-        await ctx.send("❌ Erreur de connexion à la base de données")
+    """Afficher le stock disponible"""
+    stock_data = get_stock()
+    
+    if not stock_data:
+        await ctx.send("❌ Aucune donnée de stock disponible !")
         return
     
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("""
-        SELECT category, COUNT(*) as total 
-        FROM images 
-        WHERE status = 'pending'
-        GROUP BY category
-        ORDER BY category
-    """)
+    embed = discord.Embed(title="📊 Stock disponible", color=0x7c3aed)
     
-    rows = cur.fetchall()
-    cur.close()
-    return_db_connection(conn)
+    for cat, count in stock_data.items():
+        embed.add_field(name=cat.capitalize(), value=f"{count} images", inline=True)
     
-    if not rows:
-        await ctx.send("📦 Aucun stock disponible")
-        return
-    
-    # Créer l'embed
-    embed = discord.Embed(
-        title="📦 Stock Disponible",
-        description="Nombre d'images disponibles par catégorie",
-        color=discord.Color.blue()
-    )
-    
-    total = 0
-    for row in rows:
-        category_icons = {
-            'boy': '👦',
-            'girl': '👧',
-            'banner': '🎨',
-            'anime': '🎌',
-            'aesthetic': '✨',
-            'cute': '🥰'
-        }
-        icon = category_icons.get(row['category'], '📸')
-        embed.add_field(
-            name=f"{icon} {row['category'].capitalize()}",
-            value=f"**{row['total']}** images",
-            inline=True
-        )
-        total += row['total']
-    
-    embed.set_footer(text=f"Total: {total} images disponibles")
     await ctx.send(embed=embed)
 
-@bot.command(name='help')
-async def help_command(ctx):
-    """Affiche l'aide du bot"""
-    embed = discord.Embed(
-        title="🤖 Bot Discord PFP - Aide",
-        description="Bot de distribution de photos de profil et banners",
-        color=discord.Color.purple()
-    )
-    
-    embed.add_field(
-        name="📸 !pdp <catégorie> [nombre]",
-        value="Envoie des photos de profil\nExemple: `!pdp boy 20`\nCatégories: anime, boy, girl, aesthetic, cute, banner",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="🎨 !banner [nombre]",
-        value="Envoie des banners Discord\nExemple: `!banner 10`",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="📦 !stock",
-        value="Affiche le stock disponible par catégorie",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="ℹ️ !help",
-        value="Affiche ce message d'aide",
-        inline=False
-    )
-    
-    embed.set_footer(text="Par défaut: 15 images | Maximum: 50 images par commande")
-    await ctx.send(embed=embed)
+@bot.event
+async def on_ready():
+    logging.info(f"Bot connecté en tant que {bot.user}")
 
-# Flask in thread + run bot
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        logging.error(f"Commande inconnue: {ctx.message.content}")
+    else:
+        logging.error(f"Erreur commande: {error}")
+
+# ============================================================================
+# FLASK API
+# ============================================================================
+
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "online",
+        "bot": "Discord PFP Bot",
+        "version": "2.0"
+    })
+
+@app.route('/stock')
+def api_stock():
+    return jsonify(get_stock())
+
+@app.route('/health')
+def health():
+    return jsonify({"status": "ok"}), 200
+
 def run_flask():
-    port = int(os.environ.get('PORT', 10000))
-    logger.info("Flask running on port %s", port)
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    port = int(os.getenv('PORT', 10000))
+    logging.info(f"Flask running on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False)
 
-if __name__ == "__main__":
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
+# ============================================================================
+# LANCEMENT
+# ============================================================================
+
+if __name__ == '__main__':
     try:
+        # Lancer Flask dans un thread séparé
+        flask_thread = Thread(target=run_flask, daemon=True)
+        flask_thread.start()
+        
+        # Lancer le bot Discord
         bot.run(TOKEN)
     except Exception as e:
-        logger.exception("Erreur bot")
-    finally:
-        if connection_pool:
-            connection_pool.closeall()
+        logging.error(f"Erreur bot: {e}")
