@@ -1,8 +1,5 @@
-discord.py
-flask
-flask-cors
-flask-sock
-python-dotenv
-psycopg2-binary
-requests
-beautifulsoup4
+discord.py==2.3.2
+requests==2.31.0
+beautifulsoup4==4.12.2
+psycopg2-binary==2.9.9
+Flask==2.3.3
