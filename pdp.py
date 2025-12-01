@@ -1,3 +1,40 @@
+# ----------------------
+# COMMANDE !TEST (DEBUG)
+# ----------------------
+@bot.command(name="test")
+async def test_cmd(ctx):
+    """Commande de test pour vérifier la détection d'URLs"""
+    
+    embed = discord.Embed(
+        title="🧪 Test de détection d'URLs",
+        description="Collez vos URLs pour tester la détection",
+        color=0x9b59b6
+    )
+    await ctx.send(embed=embed)
+    
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel
+    
+    try:
+        msg = await bot.wait_for("message", timeout=60, check=check)
+        content = msg.content
+        
+        # Afficher le contenu brut
+        await ctx.send(f"**Contenu reçu ({len(content)} caractères):**\n```{content[:500]}```")
+        
+        # Tester la détection
+        url_pattern = r'https?://[^\s<>"\'\)]+(?:\.jpg|\.jpeg|\.png|\.gif|\.webp)?'
+        urls = re.findall(url_pattern, content, re.IGNORECASE)
+        
+        if urls:
+            result = "\n".join([f"{i+1}. {url}" for i, url in enumerate(urls)])
+            await ctx.send(f"**URLs détectées ({len(urls)}):**\n```{result[:1500]}```")
+        else:
+            await ctx.send("❌ Aucune URL détectée")
+            
+    except asyncio.TimeoutError:
+        await ctx.send("⏱️ Temps écoulé.")
+
 # pdp.py — Version complète avec toutes les fonctionnalités
 
 import os
@@ -13,6 +50,7 @@ from discord.ext import commands
 from discord import Intents
 import re
 import json
+import random
 from urllib.parse import urlparse
 
 # ----------------------
@@ -232,13 +270,14 @@ async def url_cmd(ctx):
             "1️⃣ Allez sur Pinterest et ouvrez le board\n"
             "2️⃣ Clic droit sur chaque image → **Copier l'adresse de l'image**\n"
             "3️⃣ Collez toutes les URLs ici (une par ligne ou séparées par des espaces)\n"
-            "4️⃣ Je vous demanderai ensuite la catégorie"
+            "4️⃣ Choisissez combien importer\n"
+            "5️⃣ Choisissez la catégorie"
         ),
         inline=False
     )
     embed.add_field(
         name="💡 Astuce",
-        value="Vous pouvez coller 50+ URLs d'un coup !",
+        value="Collez 50+ URLs, puis choisissez d'en importer 10, 20, etc.",
         inline=False
     )
     embed.set_footer(text="Timeout: 120s")
@@ -249,31 +288,84 @@ async def url_cmd(ctx):
         return m.author == ctx.author and m.channel == ctx.channel
     
     # ---- ÉTAPE 1: RÉCUPÉRER LES URLs ----
-    await ctx.send("**📎 Collez vos URLs d'images :**")
+    await ctx.send("**📎 Collez vos URLs d'images (une par ligne ou toutes d'un coup) :**")
     try:
         urls_msg = await bot.wait_for("message", timeout=120, check=check)
         
-        # Extraire toutes les URLs de Pinterest
         content = urls_msg.content
-        url_pattern = r'https?://[^\s]+'
-        found_urls = re.findall(url_pattern, content)
         
-        # Filtrer uniquement les URLs d'images Pinterest
-        image_urls = [
-            url for url in found_urls 
-            if 'pinimg.com' in url or 'pinterest.com' in url
-        ]
+        # Méthode 1: Diviser par lignes et espaces
+        lines = content.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+        all_parts = []
+        for line in lines:
+            all_parts.extend(line.split())
+        
+        # Méthode 2: Regex pour capturer toutes les URLs
+        url_pattern = r'https?://[^\s<>"\'\)]+(?:\.jpg|\.jpeg|\.png|\.gif|\.webp)?'
+        regex_urls = re.findall(url_pattern, content, re.IGNORECASE)
+        
+        # Combiner les deux méthodes
+        all_urls = list(set(all_parts + regex_urls))
+        
+        # Filtrer les URLs valides d'images
+        image_urls = []
+        for url in all_urls:
+            url = url.strip()
+            # Accepter les URLs Pinterest ou directement les URLs d'images
+            if any(domain in url.lower() for domain in ['pinimg.com', 'pinterest.com', '.jpg', '.jpeg', '.png', '.gif', '.webp']):
+                if url not in image_urls:
+                    image_urls.append(url)
         
         if not image_urls:
-            return await ctx.send("❌ Aucune URL d'image trouvée. Assurez-vous de copier les URLs d'images Pinterest.")
+            return await ctx.send(
+                "❌ Aucune URL d'image trouvée.\n\n"
+                "**Astuce:** Faites clic droit sur une image Pinterest → **Copier l'adresse de l'image**\n"
+                "Les URLs doivent contenir `pinimg.com` ou se terminer par `.jpg`, `.png`, etc."
+            )
         
-        await ctx.send(f"✅ **{len(image_urls)} URLs détectées**")
+        # Afficher un aperçu
+        preview = "\n".join([f"• {url[:60]}..." if len(url) > 60 else f"• {url}" for url in image_urls[:5]])
+        if len(image_urls) > 5:
+            preview += f"\n... et {len(image_urls) - 5} autres"
+        
+        confirm_embed = discord.Embed(
+            title=f"✅ {len(image_urls)} URLs détectées",
+            description=f"**Aperçu:**\n{preview}",
+            color=0x2ecc71
+        )
+        await ctx.send(embed=confirm_embed)
         
     except asyncio.TimeoutError:
         return await ctx.send("⏱️ Temps écoulé.")
     
-    # ---- ÉTAPE 2: CATÉGORIE ----
-    await ctx.send("**2️⃣ Choisissez une catégorie :**\n`boy`, `girl`, `anime`, `aesthetic`, `cute`, `banner`, `match`")
+    # ---- ÉTAPE 2: NOMBRE À IMPORTER ----
+    await ctx.send(f"**2️⃣ Combien d'images importer ? (1-{len(image_urls)}) :**\n*Tapez `all` pour tout importer*")
+    try:
+        count_msg = await bot.wait_for("message", timeout=60, check=check)
+        count_input = count_msg.content.strip().lower()
+        
+        if count_input == "all":
+            count = len(image_urls)
+        else:
+            count = int(count_input)
+            count = max(1, min(count, len(image_urls)))
+        
+        # Sélectionner aléatoirement si moins que le total
+        import random
+        if count < len(image_urls):
+            selected_urls = random.sample(image_urls, count)
+        else:
+            selected_urls = image_urls
+        
+        await ctx.send(f"✅ **{count} images sélectionnées** sur {len(image_urls)}")
+        
+    except ValueError:
+        return await ctx.send("❌ Veuillez entrer un nombre valide ou 'all'.")
+    except asyncio.TimeoutError:
+        return await ctx.send("⏱️ Temps écoulé.")
+    
+    # ---- ÉTAPE 3: CATÉGORIE ----
+    await ctx.send("**3️⃣ Choisissez une catégorie :**\n`boy`, `girl`, `anime`, `aesthetic`, `cute`, `banner`, `match`")
     try:
         cat_msg = await bot.wait_for("message", timeout=60, check=check)
         category = cat_msg.content.strip().lower()
@@ -295,7 +387,7 @@ async def url_cmd(ctx):
     inserted = 0
     duplicates = 0
     
-    for img_url in image_urls:
+    for img_url in selected_urls:
         try:
             cur.execute(
                 "INSERT INTO images (url, category, used) VALUES (%s, %s, FALSE)",
@@ -319,7 +411,8 @@ async def url_cmd(ctx):
         title="✅ Import terminé !",
         color=0x2ecc71
     )
-    final_embed.add_field(name="📊 Total", value=str(len(image_urls)), inline=True)
+    final_embed.add_field(name="📊 URLs détectées", value=str(len(image_urls)), inline=True)
+    final_embed.add_field(name="🎯 Sélectionnées", value=str(len(selected_urls)), inline=True)
     final_embed.add_field(name="✅ Insérées", value=str(inserted), inline=True)
     final_embed.add_field(name="⚠️ Doublons", value=str(duplicates), inline=True)
     final_embed.add_field(name="📁 Catégorie", value=category, inline=False)
