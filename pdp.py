@@ -1,6 +1,3 @@
-# Code complet refait et corrigé
-
-```python
 import os
 import asyncio
 import logging
@@ -197,3 +194,4 @@ def start_bot():
 Thread(target=run_flask).start()
 start_bot()
 ```
+
