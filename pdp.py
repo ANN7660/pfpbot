@@ -1,325 +1,381 @@
 import discord
-from discord.ext import commands, tasks
-from discord.ui import View, Button, Select, SelectOption 
-from datetime import datetime, timedelta
-import asyncio
-import re
-from typing import Optional, Dict, Any
-import os # Ajout pour la gestion du token (meilleure pratique)
+from discord.ext import commands
+from discord import app_commands
+import aiohttp
+import os
+from typing import Optional
 
 # ==============================================================================
-# ⚠️ Configuration et Variables Globales
+# ⚙️ CONFIGURATION
 # ==============================================================================
 
-# Variable pour simuler votre base de données de configuration
-config: Dict[int, Dict[str, Any]] = {}
-CHRISTMAS_MODE = False # Mettez à True pour activer le mode Noël
+# URL de votre API backend
+API_URL = "https://pfpbot-8e9l.onrender.com"
+API_KEY = "Nono1912"
 
 # ==============================================================================
-# 🛠️ Fonctions Utilitaires (Implémentations Simples pour l'Exemple)
-# ==============================================================================
-
-def get_gcfg(guild_id: int) -> Dict[str, Any]:
-    """Simule la récupération de la configuration d'une guilde."""
-    return config.setdefault(guild_id, {
-        "openTickets": {},
-        "roleReacts": {},
-        "statsChannels": [],
-        "ticketRoles": [],
-        "ticketCategory": None,
-        "logChannel": None,
-        "tempVocChannels": []
-    })
-
-def save_config(cfg: Dict[int, Dict[str, Any]]):
-    """Simule la sauvegarde de la configuration globale."""
-    pass
-
-async def send_log(guild: discord.Guild, embed: discord.Embed):
-    """Simule l'envoi d'un journal de bord."""
-    gcfg = get_gcfg(guild.id)
-    log_ch_id = gcfg.get("logChannel")
-    if log_ch_id:
-        try:
-            channel = guild.get_channel(int(log_ch_id))
-            if channel:
-                await channel.send(embed=embed)
-        except Exception:
-            pass
-
-def _noel_title(text: str) -> str:
-    """Ajoute un préfixe de Noël au titre si le mode est activé."""
-    return f"🎄 {text}" if CHRISTMAS_MODE else text
-
-def _noel_channel_prefix(text: str) -> str:
-    """Ajoute un préfixe de Noël au nom de salon."""
-    return f"❄️ {text}" if CHRISTMAS_MODE else text
-
-def parse_duration(duration: str) -> Optional[int]:
-    """Analyse une durée (ex: 10m, 1h) et retourne les secondes."""
-    duration = duration.lower()
-    match = re.fullmatch(r"(\d+)([smhd])", duration)
-    if not match:
-        return None
-    amount = int(match.group(1))
-    unit = match.group(2)
-    
-    if unit == 's':
-        return amount
-    elif unit == 'm':
-        return amount * 60
-    elif unit == 'h':
-        return amount * 60 * 60
-    elif unit == 'd':
-        return amount * 60 * 60 * 24
-    return None
-
-# ==============================================================================
-# 🤖 Définition du Bot
+# 🤖 INITIALISATION DU BOT
 # ==============================================================================
 
 intents = discord.Intents.default()
-intents.message_content = True  
-intents.members = True          
-intents.presences = True        
+intents.message_content = True
+intents.guilds = True
 
-# Initialisation du client Bot
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # ==============================================================================
-# 🖼️ Définition des Vues (Views/Interactions)
+# 📊 FONCTIONS UTILITAIRES
 # ==============================================================================
 
-class HelpView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
+async def get_api_stats():
+    """Récupère les statistiques depuis l'API."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{API_URL}/api/stats",
+                headers={"X-API-Key": API_KEY}
+            ) as response:
+                if response.status == 200:
+                    return await response.json()
+                return None
+    except Exception as e:
+        print(f"Erreur API stats: {e}")
+        return None
 
-class TicketView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        # 🟢 CORRECTION: Utilise discord.ButtonStyle
-        self.add_item(Button(label=_noel_title("Créer un Ticket"), custom_id="create_ticket", style=discord.ButtonStyle.primary, emoji="🎫"))
-
-    @discord.ui.button(custom_id="create_ticket")
-    async def create_ticket(self, button: Button, interaction: discord.Interaction):
-        await interaction.response.send_message("Fonctionnalité de création de ticket non implémentée.", ephemeral=True)
-        # TODO: Implémentez ici la logique de création de salon de ticket
-
-class AdminTicketView(View):
-    # La logique interne pour la sélection et les boutons est préservée
-    def __init__(self, gcfg, author_id):
-        super().__init__(timeout=120)
-        self.gcfg = gcfg
-        self.author_id = author_id
-        self.selected_channel: Optional[str] = None
-
-        options = []
-        for ch_id, info in (gcfg.get("openTickets") or {}).items():
-            owner_id = info.get("owner")
-            created_ts = info.get("created")
-            label_time = datetime.utcfromtimestamp(created_ts).strftime('%Y-%m-%d %H:%M') if created_ts else "inconnu"
-            label = f"#{ch_id} • {label_time}"
-            desc = f"Owner: <@{owner_id}>" if owner_id else "Owner: inconnu"
-            options.append(SelectOption(label=label[:100], value=str(ch_id), description=desc[:100]))
-        if not options:
-            options = [SelectOption(label="Aucun ticket ouvert", value="none", description="Il n'y a pas de tickets ouverts.")]
-
-        self.select = Select(placeholder="Sélectionnez un ticket", min_values=1, max_values=1, options=options, custom_id="admin_ticket_select")
-        self.select.callback = self.select_callback
-        self.add_item(self.select)
-    
-    async def select_callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("❌ Seul l'auteur peut utiliser ce panneau.", ephemeral=True)
-            return
-        self.selected_channel = self.select.values[0]
-        await interaction.response.send_message(f"✅ Ticket sélectionné: {self.selected_channel}", ephemeral=True)
-        
-    # 🟢 CORRECTION: Utilise discord.ButtonStyle
-    @discord.ui.button(label="❌ Fermer le Ticket Sélectionné", style=discord.ButtonStyle.danger, custom_id="admin_close_selected")
-    async def close_selected(self, button: Button, interaction: discord.Interaction):
-        await interaction.response.send_message("Fermeture non implémentée.", ephemeral=True)
-
-    # 🟢 CORRECTION: Utilise discord.ButtonStyle
-    @discord.ui.button(label="🧹 Fermer Tous les Tickets", style=discord.ButtonStyle.secondary, custom_id="admin_close_all")
-    async def close_all(self, button: Button, interaction: discord.Interaction):
-        await interaction.response.send_message("Fermeture de tous les tickets non implémentée.", ephemeral=True)
-
-    # 🟢 CORRECTION: Utilise discord.ButtonStyle
-    @discord.ui.button(label="🔄 Rafraîchir", style=discord.ButtonStyle.primary, custom_id="admin_refresh")
-    async def refresh(self, button: Button, interaction: discord.Interaction):
-        await interaction.response.send_message("Rafraîchissement non implémenté.", ephemeral=True)
+async def get_random_photos(category: str, count: int):
+    """Récupère des photos aléatoires depuis l'API."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{API_URL}/api/photos/random?category={category}&count={count}",
+                headers={"X-API-Key": API_KEY}
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get("photos", [])
+                return None
+    except Exception as e:
+        print(f"Erreur API photos: {e}")
+        return None
 
 # ==============================================================================
-# ⚙️ Tâches en Arrière-plan
-# ==============================================================================
-
-@tasks.loop(minutes=1)
-async def stats_updater_loop():
-    """Mets à jour les salons de statistiques toutes les minutes."""
-    for guild in bot.guilds:
-        gcfg = get_gcfg(guild.id)
-        chan_ids = gcfg.get("statsChannels") or []
-        
-        if len(chan_ids) < 4: continue
-        
-        # Récupération des statistiques
-        members = guild.member_count
-        bots = len([m for m in guild.members if m.bot])
-        in_voice = len([m for m in guild.members if m.voice and m.voice.channel])
-        total_channels = len(guild.channels)
-        
-        stats = [
-            (chan_ids[0], "Membres", members, "👥"),
-            (chan_ids[1], "Bots", bots, "🤖"),
-            (chan_ids[2], "En vocal", in_voice, "🔊"),
-            (chan_ids[3], "Salons", total_channels, "📁"),
-        ]
-
-        for cid, label, count, emoji in stats:
-            try:
-                channel = guild.get_channel(int(cid))
-                if channel:
-                    prefix = f"🎄 {label}" if CHRISTMAS_MODE else f"{emoji} {label}"
-                    new_name = f"{prefix} : {count}"
-                    await channel.edit(name=new_name)
-            except Exception:
-                pass
-
-# ==============================================================================
-# 🔔 Événements (Events)
+# 🔔 ÉVÉNEMENTS
 # ==============================================================================
 
 @bot.event
 async def on_ready():
-    """S'exécute lorsque le bot est prêt."""
-    print(f"✅ Bot connecté en tant que {bot.user} (id: {bot.user.id})")
-    try:
-        bot.add_view(HelpView())
-        bot.add_view(TicketView())
-    except Exception as e:
-        print("Erreur add_view:", e)
-
-    if not stats_updater_loop.is_running():
-        stats_updater_loop.start()
-
-@bot.event
-async def on_interaction(interaction: discord.Interaction):
-    """Gère les interactions, y compris la fermeture des tickets."""
-    if interaction.type != discord.InteractionType.component:
-        return
-    cid = ""
-    if interaction.data:
-        cid = interaction.data.get("custom_id", "") or interaction.data.get("customId", "")
-
-    if cid.startswith("close_ticket_"):
-        await interaction.response.send_message("Fonctionnalité de fermeture non implémentée.", ephemeral=True)
-    elif cid.startswith("confirm_close_"):
-        await interaction.response.edit_message(content="🔒 Fermeture du ticket...", embed=None, view=None)
-    elif cid == "cancel_close":
-        await interaction.response.edit_message(content="✅ Fermeture annulée.", embed=None, view=None)
+    """Événement déclenché quand le bot est prêt."""
+    print(f"✅ Bot connecté : {bot.user.name} (ID: {bot.user.id})")
+    print(f"📊 Connecté sur {len(bot.guilds)} serveur(s)")
     
-    await bot.process_application_commands(interaction)
-
-@bot.event
-async def on_member_join(member: discord.Member):
-    pass # Logique de join ici
-
-@bot.event
-async def on_member_remove(member: discord.Member):
-    pass # Logique de leave ici
-
-@bot.event
-async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-    pass # Logique de rôle réactif ici
-
-@bot.event
-async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
-    pass # Logique de rôle réactif ici
-
-@bot.event
-async def on_voice_state_update(member, before, after):
-    pass # Logique de vocaux temporaires ici
+    # Synchroniser les slash commands
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ {len(synced)} commandes slash synchronisées")
+    except Exception as e:
+        print(f"❌ Erreur sync: {e}")
 
 # ==============================================================================
-# 📜 Commandes (Commands)
+# 📜 COMMANDES
 # ==============================================================================
-
-def admin_required():
-    async def predicate(ctx):
-        return ctx.author.guild_permissions.administrator
-    return commands.check(predicate)
 
 @bot.command(name="help")
 async def cmd_help(ctx):
-    embed = discord.Embed(title=_noel_title("Menu d'aide du Bot"), description="Sélectionnez une catégorie pour voir les commandes", color=0x3498db)
-    await ctx.reply(embed=embed, view=HelpView())
-
-@bot.command(name="ticketpanel")
-@admin_required()
-async def cmd_ticketpanel(ctx):
-    embed = discord.Embed(title=_noel_title("Support Tickets"), description="Cliquez ci-dessous pour créer un ticket de support.", color=0x3498db)
-    view = TicketView()
-    await ctx.send(embed=embed, view=view)
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
-
-@bot.command(name="ticketadmin")
-@admin_required()
-async def cmd_ticketadmin(ctx):
-    gcfg = get_gcfg(ctx.guild.id)
-    view = AdminTicketView(gcfg, ctx.author.id)
-    embed = discord.Embed(title=_noel_title("Panneau Admin - Tickets"), color=0x95a5a6)
+    """Affiche le menu d'aide."""
+    embed = discord.Embed(
+        title="🎨 Bot PDP - Menu d'aide",
+        description="Voici toutes les commandes disponibles :",
+        color=discord.Color.blue()
+    )
     
-    # Affichage sommaire des tickets
-    entries = gcfg.get("openTickets", {})
-    embed.description = f"**Tickets ouverts:** {len(entries)}"
+    embed.add_field(
+        name="📸 !pdp <catégorie> <nombre>",
+        value="Envoie des photos de profil aléatoires\n"
+              "Catégories : `boy`, `girl`, `anime`, `aesthetic`, `cute`, `banner`, `match`\n"
+              "Exemple : `!pdp boy 5`",
+        inline=False
+    )
     
-    await ctx.reply(embed=embed, view=view, ephemeral=False)
+    embed.add_field(
+        name="📊 !stock",
+        value="Affiche le nombre de photos disponibles par catégorie",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="❓ !help",
+        value="Affiche ce menu d'aide",
+        inline=False
+    )
+    
+    embed.set_footer(text="Bot créé avec ❤️ | Mode Noël 🎄")
+    embed.timestamp = discord.utils.utcnow()
+    
+    await ctx.send(embed=embed)
 
-@bot.command(name="ban")
-@commands.has_permissions(ban_members=True)
-async def cmd_ban(ctx, member: discord.Member, *, reason: str = "Aucune raison fournie"):
-    await ctx.reply(f"Ban de {member.mention} simulé.")
-
-@bot.command(name="mute")
-@commands.has_permissions(moderate_members=True)
-async def cmd_mute(ctx, member: discord.Member, duration: str, *, reason: str = "Aucune raison fournie"):
-    secs = parse_duration(duration)
-    if secs is None:
-        return await ctx.reply("❌ Durée invalide. Utilisez: 10s, 5m, 1h, 1d")
-    await ctx.reply(f"Mute de {member.mention} pour {duration} ({secs}s) simulé.")
-
-# (Autres commandes de modération et de configuration se trouveraient ici)
-
-@bot.command(name="config")
-@admin_required()
-async def cmd_config(ctx):
-    await ctx.reply("Menu de configuration simulé.")
-
-# ==============================================================================
-# 🟢 Exécution du Bot
-# ==============================================================================
-
-if __name__ == '__main__':
-    # ⚠️ CHARGEMENT DU TOKEN: Utilisez une variable d'environnement pour la sécurité
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-        TOKEN = os.getenv('DISCORD_TOKEN')
-    except ImportError:
-        # Si python-dotenv n'est pas installé ou si la ligne est commentée
-        TOKEN = "VOTRE_TOKEN_ICI" # Remplacer par votre token si dotenv n'est pas utilisé
-
-    if TOKEN and TOKEN != "VOTRE_TOKEN_ICI":
-        print("Démarrage du bot...")
-        try:
-            bot.run(TOKEN)
-        except discord.errors.LoginFailure:
-            print("\n\nERREUR: Le token du bot est invalide. Veuillez le vérifier.\n")
-        except Exception as e:
-            print(f"\n\nUne erreur inattendue s'est produite lors du démarrage: {e}\n")
+@bot.command(name="stock")
+async def cmd_stock(ctx):
+    """Affiche le stock de photos par catégorie."""
+    # Message de chargement
+    loading_msg = await ctx.send("⏳ Chargement des statistiques...")
+    
+    # Récupération des stats
+    stats = await get_api_stats()
+    
+    if not stats:
+        await loading_msg.edit(content="❌ Impossible de récupérer les statistiques. L'API ne répond pas.")
+        return
+    
+    # Création de l'embed
+    embed = discord.Embed(
+        title="📊 Stock de Photos Disponibles",
+        description=f"**Total : {stats.get('total_photos', 0):,} photos**",
+        color=discord.Color.green()
+    )
+    
+    # Mapping des catégories avec emojis
+    category_emojis = {
+        "boy": "👦",
+        "girl": "👧",
+        "anime": "🎌",
+        "aesthetic": "✨",
+        "cute": "🥰",
+        "banner": "🎨",
+        "match": "💕"
+    }
+    
+    # Ajout des catégories
+    categories = stats.get("categories", [])
+    if categories:
+        for cat_data in categories:
+            category = cat_data.get("category", "inconnu")
+            count = cat_data.get("count", 0)
+            emoji = category_emojis.get(category, "📷")
+            
+            embed.add_field(
+                name=f"{emoji} {category.capitalize()}",
+                value=f"**{count:,}** photos",
+                inline=True
+            )
     else:
-        print("\n\nERREUR: Le token du bot n'a pas été chargé. Vérifiez votre fichier .env ou la variable TOKEN.\n")
+        embed.add_field(
+            name="⚠️ Aucune donnée",
+            value="Le stock est vide ou l'API n'a pas retourné de catégories.",
+            inline=False
+        )
+    
+    # Infos supplémentaires
+    embed.add_field(
+        name="📤 Imports ce mois",
+        value=f"**{stats.get('recent_imports', 0)}** imports",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="📁 Sur Discord",
+        value=f"**{stats.get('available_photos', 0):,}** photos",
+        inline=True
+    )
+    
+    embed.set_footer(text="Utilisez !pdp <catégorie> <nombre> pour récupérer des photos")
+    embed.timestamp = discord.utils.utcnow()
+    
+    await loading_msg.edit(content=None, embed=embed)
+
+@bot.command(name="pdp")
+async def cmd_pdp(ctx, category: str = None, count: int = 1):
+    """Envoie des photos de profil aléatoires."""
+    
+    # Vérifications
+    if not category:
+        await ctx.send("❌ **Utilisation :** `!pdp <catégorie> <nombre>`\n"
+                      "📚 **Catégories :** boy, girl, anime, aesthetic, cute, banner, match\n"
+                      "💡 **Exemple :** `!pdp boy 5`")
+        return
+    
+    valid_categories = ["boy", "girl", "anime", "aesthetic", "cute", "banner", "match"]
+    if category.lower() not in valid_categories:
+        await ctx.send(f"❌ Catégorie invalide : `{category}`\n"
+                      f"📚 **Catégories disponibles :** {', '.join(valid_categories)}")
+        return
+    
+    if count < 1 or count > 10:
+        await ctx.send("❌ Le nombre doit être entre **1** et **10** photos.")
+        return
+    
+    # Message de chargement
+    loading_msg = await ctx.send(f"⏳ Recherche de **{count}** photo(s) dans la catégorie `{category}`...")
+    
+    # Récupération des photos
+    photos = await get_random_photos(category.lower(), count)
+    
+    if not photos:
+        await loading_msg.edit(content=f"❌ Aucune photo trouvée pour la catégorie `{category}` ou l'API ne répond pas.")
+        return
+    
+    # Suppression du message de chargement
+    await loading_msg.delete()
+    
+    # Envoi des photos
+    category_emojis = {
+        "boy": "👦",
+        "girl": "👧",
+        "anime": "🎌",
+        "aesthetic": "✨",
+        "cute": "🥰",
+        "banner": "🎨",
+        "match": "💕"
+    }
+    
+    emoji = category_emojis.get(category.lower(), "📷")
+    
+    embed = discord.Embed(
+        title=f"{emoji} Photos - {category.capitalize()}",
+        description=f"Voici **{len(photos)}** photo(s) aléatoire(s) !",
+        color=discord.Color.purple()
+    )
+    
+    embed.set_footer(text=f"Demandé par {ctx.author.name}")
+    embed.timestamp = discord.utils.utcnow()
+    
+    await ctx.send(embed=embed)
+    
+    # Envoi de chaque photo
+    for i, photo in enumerate(photos, 1):
+        try:
+            embed_photo = discord.Embed(color=discord.Color.random())
+            embed_photo.set_image(url=photo.get("url"))
+            embed_photo.set_footer(text=f"Photo {i}/{len(photos)} • ID: {photo.get('id')}")
+            await ctx.send(embed=embed_photo)
+        except Exception as e:
+            print(f"Erreur envoi photo {i}: {e}")
+            await ctx.send(f"❌ Erreur lors de l'envoi de la photo {i}")
+
+# ==============================================================================
+# 🚀 SLASH COMMANDS (Commandes modernes Discord)
+# ==============================================================================
+
+@bot.tree.command(name="help", description="Affiche le menu d'aide")
+async def slash_help(interaction: discord.Interaction):
+    """Slash command pour l'aide."""
+    embed = discord.Embed(
+        title="🎨 Bot PDP - Menu d'aide",
+        description="Voici toutes les commandes disponibles :",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(
+        name="/pdp <catégorie> <nombre>",
+        value="Envoie des photos de profil aléatoires",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="/stock",
+        value="Affiche le nombre de photos disponibles par catégorie",
+        inline=False
+    )
+    
+    embed.set_footer(text="Bot PDP • Mode Noël 🎄")
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="stock", description="Affiche le stock de photos par catégorie")
+async def slash_stock(interaction: discord.Interaction):
+    """Slash command pour le stock."""
+    await interaction.response.defer()
+    
+    stats = await get_api_stats()
+    
+    if not stats:
+        await interaction.followup.send("❌ Impossible de récupérer les statistiques.")
+        return
+    
+    embed = discord.Embed(
+        title="📊 Stock de Photos",
+        description=f"**Total : {stats.get('total_photos', 0):,} photos**",
+        color=discord.Color.green()
+    )
+    
+    category_emojis = {
+        "boy": "👦", "girl": "👧", "anime": "🎌",
+        "aesthetic": "✨", "cute": "🥰", "banner": "🎨", "match": "💕"
+    }
+    
+    for cat_data in stats.get("categories", []):
+        category = cat_data.get("category", "inconnu")
+        count = cat_data.get("count", 0)
+        emoji = category_emojis.get(category, "📷")
+        embed.add_field(name=f"{emoji} {category.capitalize()}", value=f"**{count:,}** photos", inline=True)
+    
+    await interaction.followup.send(embed=embed)
+
+@bot.tree.command(name="pdp", description="Récupère des photos de profil")
+@app_commands.describe(
+    category="Catégorie de photos (boy, girl, anime, etc.)",
+    count="Nombre de photos (1-10)"
+)
+@app_commands.choices(category=[
+    app_commands.Choice(name="👦 Boy", value="boy"),
+    app_commands.Choice(name="👧 Girl", value="girl"),
+    app_commands.Choice(name="🎌 Anime", value="anime"),
+    app_commands.Choice(name="✨ Aesthetic", value="aesthetic"),
+    app_commands.Choice(name="🥰 Cute", value="cute"),
+    app_commands.Choice(name="🎨 Banner", value="banner"),
+    app_commands.Choice(name="💕 Match", value="match"),
+])
+async def slash_pdp(interaction: discord.Interaction, category: str, count: int = 1):
+    """Slash command pour récupérer des photos."""
+    if count < 1 or count > 10:
+        await interaction.response.send_message("❌ Le nombre doit être entre 1 et 10.", ephemeral=True)
+        return
+    
+    await interaction.response.defer()
+    
+    photos = await get_random_photos(category, count)
+    
+    if not photos:
+        await interaction.followup.send(f"❌ Aucune photo trouvée pour `{category}`.")
+        return
+    
+    # Premier message avec info
+    embed = discord.Embed(
+        title=f"📷 {len(photos)} photo(s) - {category.capitalize()}",
+        description="Chargement des images...",
+        color=discord.Color.purple()
+    )
+    await interaction.followup.send(embed=embed)
+    
+    # Envoi des photos
+    for photo in photos:
+        try:
+            embed_photo = discord.Embed(color=discord.Color.random())
+            embed_photo.set_image(url=photo.get("url"))
+            await interaction.channel.send(embed=embed_photo)
+        except Exception as e:
+            print(f"Erreur: {e}")
+
+# ==============================================================================
+# 🟢 DÉMARRAGE DU BOT
+# ==============================================================================
+
+if __name__ == "__main__":
+    # Pour Render : Le token sera dans les variables d'environnement
+    TOKEN = os.getenv("DISCORD_TOKEN")
+    
+    if not TOKEN:
+        print("❌ ERREUR : Variable d'environnement DISCORD_TOKEN manquante !")
+        print("📝 Sur Render : Ajoutez DISCORD_TOKEN dans Environment Variables")
+        exit(1)
+    
+    print("🚀 Démarrage du bot sur Render...")
+    print(f"🌐 API URL : {API_URL}")
+    
+    try:
+        bot.run(TOKEN)
+    except discord.errors.LoginFailure:
+        print("❌ Token Discord invalide !")
+        exit(1)
+    except Exception as e:
+        print(f"❌ Erreur critique : {e}")
+        exit(1)
