@@ -1,254 +1,325 @@
-# Ajoutez ces imports en haut de votre fichier Flask
-import requests
+import discord
+from discord.ext import commands, tasks
+from discord.ui import View, Button, Select, SelectOption 
+from datetime import datetime, timedelta
+import asyncio
 import re
-import json
-import time
-import random
-from bs4 import BeautifulSoup
+from typing import Optional, Dict, Any
+import os # Ajout pour la gestion du token (meilleure pratique)
 
-# ===== CLASSE SCRAPER (Copiez la classe PinterestScraper complète ici) =====
+# ==============================================================================
+# ⚠️ Configuration et Variables Globales
+# ==============================================================================
 
-class PinterestScraper:
-    """Scraper Pinterest sans API"""
-    
-    def __init__(self):
-        self.session = requests.Session()
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-        }
-    
-    def scrape(self, url, max_images=50):
-        """Méthode combinée avec les 3 techniques"""
+# Variable pour simuler votre base de données de configuration
+config: Dict[int, Dict[str, Any]] = {}
+CHRISTMAS_MODE = False # Mettez à True pour activer le mode Noël
+
+# ==============================================================================
+# 🛠️ Fonctions Utilitaires (Implémentations Simples pour l'Exemple)
+# ==============================================================================
+
+def get_gcfg(guild_id: int) -> Dict[str, Any]:
+    """Simule la récupération de la configuration d'une guilde."""
+    return config.setdefault(guild_id, {
+        "openTickets": {},
+        "roleReacts": {},
+        "statsChannels": [],
+        "ticketRoles": [],
+        "ticketCategory": None,
+        "logChannel": None,
+        "tempVocChannels": []
+    })
+
+def save_config(cfg: Dict[int, Dict[str, Any]]):
+    """Simule la sauvegarde de la configuration globale."""
+    pass
+
+async def send_log(guild: discord.Guild, embed: discord.Embed):
+    """Simule l'envoi d'un journal de bord."""
+    gcfg = get_gcfg(guild.id)
+    log_ch_id = gcfg.get("logChannel")
+    if log_ch_id:
         try:
-            time.sleep(random.uniform(1, 2))
-            
-            response = self.session.get(url, headers=self.headers, timeout=15)
-            response.raise_for_status()
-            
-            images = set()
-            
-            # 1. Chercher le JSON embarqué
-            pattern = r'<script id="__PWS_DATA__" type="application/json">({.*?})</script>'
-            match = re.search(pattern, response.text, re.DOTALL)
-            
-            if match:
-                try:
-                    data = json.loads(match.group(1))
-                    self._extract_images_recursive(data, images)
-                except:
-                    pass
-            
-            # 2. Regex agressif sur URLs
-            patterns = [
-                r'https://i\.pinimg\.com/originals/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9a-zA-Z_-]+\.(?:jpg|jpeg|png)',
-                r'https://i\.pinimg\.com/736x/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9a-zA-Z_-]+\.(?:jpg|jpeg|png)',
-            ]
-            
-            for p in patterns:
-                matches = re.findall(p, response.text)
-                images.update(matches)
-            
-            # Convertir en haute qualité
-            hq_images = []
-            for img in images:
-                if '/originals/' in img:
-                    hq_images.append(img.split('?')[0])
-                else:
-                    converted = re.sub(r'/(736x|564x|474x|236x)/', '/originals/', img)
-                    hq_images.append(converted.split('?')[0])
-            
-            result = list(set(hq_images))[:max_images]
-            logging.info(f"✅ {len(result)} images extraites de Pinterest")
-            return result
-            
-        except Exception as e:
-            logging.error(f"❌ Erreur scraping Pinterest: {e}")
-            return []
+            channel = guild.get_channel(int(log_ch_id))
+            if channel:
+                await channel.send(embed=embed)
+        except Exception:
+            pass
+
+def _noel_title(text: str) -> str:
+    """Ajoute un préfixe de Noël au titre si le mode est activé."""
+    return f"🎄 {text}" if CHRISTMAS_MODE else text
+
+def _noel_channel_prefix(text: str) -> str:
+    """Ajoute un préfixe de Noël au nom de salon."""
+    return f"❄️ {text}" if CHRISTMAS_MODE else text
+
+def parse_duration(duration: str) -> Optional[int]:
+    """Analyse une durée (ex: 10m, 1h) et retourne les secondes."""
+    duration = duration.lower()
+    match = re.fullmatch(r"(\d+)([smhd])", duration)
+    if not match:
+        return None
+    amount = int(match.group(1))
+    unit = match.group(2)
     
-    def _extract_images_recursive(self, obj, images, depth=0):
-        """Extraction récursive des URLs d'images"""
-        if depth > 8:
+    if unit == 's':
+        return amount
+    elif unit == 'm':
+        return amount * 60
+    elif unit == 'h':
+        return amount * 60 * 60
+    elif unit == 'd':
+        return amount * 60 * 60 * 24
+    return None
+
+# ==============================================================================
+# 🤖 Définition du Bot
+# ==============================================================================
+
+intents = discord.Intents.default()
+intents.message_content = True  
+intents.members = True          
+intents.presences = True        
+
+# Initialisation du client Bot
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+# ==============================================================================
+# 🖼️ Définition des Vues (Views/Interactions)
+# ==============================================================================
+
+class HelpView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+class TicketView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        # 🟢 CORRECTION: Utilise discord.ButtonStyle
+        self.add_item(Button(label=_noel_title("Créer un Ticket"), custom_id="create_ticket", style=discord.ButtonStyle.primary, emoji="🎫"))
+
+    @discord.ui.button(custom_id="create_ticket")
+    async def create_ticket(self, button: Button, interaction: discord.Interaction):
+        await interaction.response.send_message("Fonctionnalité de création de ticket non implémentée.", ephemeral=True)
+        # TODO: Implémentez ici la logique de création de salon de ticket
+
+class AdminTicketView(View):
+    # La logique interne pour la sélection et les boutons est préservée
+    def __init__(self, gcfg, author_id):
+        super().__init__(timeout=120)
+        self.gcfg = gcfg
+        self.author_id = author_id
+        self.selected_channel: Optional[str] = None
+
+        options = []
+        for ch_id, info in (gcfg.get("openTickets") or {}).items():
+            owner_id = info.get("owner")
+            created_ts = info.get("created")
+            label_time = datetime.utcfromtimestamp(created_ts).strftime('%Y-%m-%d %H:%M') if created_ts else "inconnu"
+            label = f"#{ch_id} • {label_time}"
+            desc = f"Owner: <@{owner_id}>" if owner_id else "Owner: inconnu"
+            options.append(SelectOption(label=label[:100], value=str(ch_id), description=desc[:100]))
+        if not options:
+            options = [SelectOption(label="Aucun ticket ouvert", value="none", description="Il n'y a pas de tickets ouverts.")]
+
+        self.select = Select(placeholder="Sélectionnez un ticket", min_values=1, max_values=1, options=options, custom_id="admin_ticket_select")
+        self.select.callback = self.select_callback
+        self.add_item(self.select)
+    
+    async def select_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Seul l'auteur peut utiliser ce panneau.", ephemeral=True)
             return
+        self.selected_channel = self.select.values[0]
+        await interaction.response.send_message(f"✅ Ticket sélectionné: {self.selected_channel}", ephemeral=True)
         
-        if isinstance(obj, dict):
-            for key in ['url', 'src', 'image']:
-                if key in obj:
-                    value = obj[key]
-                    if isinstance(value, str) and 'pinimg.com' in value:
-                        images.add(value.split('?')[0])
-            
-            for value in obj.values():
-                self._extract_images_recursive(value, images, depth + 1)
-                
-        elif isinstance(obj, list):
-            for item in obj:
-                self._extract_images_recursive(item, images, depth + 1)
+    # 🟢 CORRECTION: Utilise discord.ButtonStyle
+    @discord.ui.button(label="❌ Fermer le Ticket Sélectionné", style=discord.ButtonStyle.danger, custom_id="admin_close_selected")
+    async def close_selected(self, button: Button, interaction: discord.Interaction):
+        await interaction.response.send_message("Fermeture non implémentée.", ephemeral=True)
 
+    # 🟢 CORRECTION: Utilise discord.ButtonStyle
+    @discord.ui.button(label="🧹 Fermer Tous les Tickets", style=discord.ButtonStyle.secondary, custom_id="admin_close_all")
+    async def close_all(self, button: Button, interaction: discord.Interaction):
+        await interaction.response.send_message("Fermeture de tous les tickets non implémentée.", ephemeral=True)
 
-# ===== ENDPOINT FLASK MODIFIÉ =====
+    # 🟢 CORRECTION: Utilise discord.ButtonStyle
+    @discord.ui.button(label="🔄 Rafraîchir", style=discord.ButtonStyle.primary, custom_id="admin_refresh")
+    async def refresh(self, button: Button, interaction: discord.Interaction):
+        await interaction.response.send_message("Rafraîchissement non implémenté.", ephemeral=True)
 
-@app.route("/api/import", methods=["POST"])
-@require_api_key
-@limiter.limit("5 per hour")  # Limite stricte pour éviter les bans
-def import_photos():
-    """Endpoint d'import avec scraping Pinterest SANS API"""
-    conn = db_connect()
-    if not conn:
-        return jsonify({"error": "Erreur DB"}), 500
+# ==============================================================================
+# ⚙️ Tâches en Arrière-plan
+# ==============================================================================
+
+@tasks.loop(minutes=1)
+async def stats_updater_loop():
+    """Mets à jour les salons de statistiques toutes les minutes."""
+    for guild in bot.guilds:
+        gcfg = get_gcfg(guild.id)
+        chan_ids = gcfg.get("statsChannels") or []
+        
+        if len(chan_ids) < 4: continue
+        
+        # Récupération des statistiques
+        members = guild.member_count
+        bots = len([m for m in guild.members if m.bot])
+        in_voice = len([m for m in guild.members if m.voice and m.voice.channel])
+        total_channels = len(guild.channels)
+        
+        stats = [
+            (chan_ids[0], "Membres", members, "👥"),
+            (chan_ids[1], "Bots", bots, "🤖"),
+            (chan_ids[2], "En vocal", in_voice, "🔊"),
+            (chan_ids[3], "Salons", total_channels, "📁"),
+        ]
+
+        for cid, label, count, emoji in stats:
+            try:
+                channel = guild.get_channel(int(cid))
+                if channel:
+                    prefix = f"🎄 {label}" if CHRISTMAS_MODE else f"{emoji} {label}"
+                    new_name = f"{prefix} : {count}"
+                    await channel.edit(name=new_name)
+            except Exception:
+                pass
+
+# ==============================================================================
+# 🔔 Événements (Events)
+# ==============================================================================
+
+@bot.event
+async def on_ready():
+    """S'exécute lorsque le bot est prêt."""
+    print(f"✅ Bot connecté en tant que {bot.user} (id: {bot.user.id})")
+    try:
+        bot.add_view(HelpView())
+        bot.add_view(TicketView())
+    except Exception as e:
+        print("Erreur add_view:", e)
+
+    if not stats_updater_loop.is_running():
+        stats_updater_loop.start()
+
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    """Gère les interactions, y compris la fermeture des tickets."""
+    if interaction.type != discord.InteractionType.component:
+        return
+    cid = ""
+    if interaction.data:
+        cid = interaction.data.get("custom_id", "") or interaction.data.get("customId", "")
+
+    if cid.startswith("close_ticket_"):
+        await interaction.response.send_message("Fonctionnalité de fermeture non implémentée.", ephemeral=True)
+    elif cid.startswith("confirm_close_"):
+        await interaction.response.edit_message(content="🔒 Fermeture du ticket...", embed=None, view=None)
+    elif cid == "cancel_close":
+        await interaction.response.edit_message(content="✅ Fermeture annulée.", embed=None, view=None)
     
+    await bot.process_application_commands(interaction)
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    pass # Logique de join ici
+
+@bot.event
+async def on_member_remove(member: discord.Member):
+    pass # Logique de leave ici
+
+@bot.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    pass # Logique de rôle réactif ici
+
+@bot.event
+async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+    pass # Logique de rôle réactif ici
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    pass # Logique de vocaux temporaires ici
+
+# ==============================================================================
+# 📜 Commandes (Commands)
+# ==============================================================================
+
+def admin_required():
+    async def predicate(ctx):
+        return ctx.author.guild_permissions.administrator
+    return commands.check(predicate)
+
+@bot.command(name="help")
+async def cmd_help(ctx):
+    embed = discord.Embed(title=_noel_title("Menu d'aide du Bot"), description="Sélectionnez une catégorie pour voir les commandes", color=0x3498db)
+    await ctx.reply(embed=embed, view=HelpView())
+
+@bot.command(name="ticketpanel")
+@admin_required()
+async def cmd_ticketpanel(ctx):
+    embed = discord.Embed(title=_noel_title("Support Tickets"), description="Cliquez ci-dessous pour créer un ticket de support.", color=0x3498db)
+    view = TicketView()
+    await ctx.send(embed=embed, view=view)
     try:
-        data = request.get_json()
-        pinterest_url = data.get('pinterest_url', '')
-        category = data.get('category', 'uncategorized')
-        max_photos = min(100, data.get('max_photos', 50))
-        
-        # Validation de l'URL
-        if not pinterest_url:
-            return jsonify({"error": "URL Pinterest manquante"}), 400
-        
-        if 'pinterest.com' not in pinterest_url:
-            return jsonify({"error": "L'URL doit être un lien Pinterest"}), 400
-        
-        # SCRAPING RÉEL
-        logging.info(f"🔍 Scraping Pinterest: {pinterest_url}")
-        scraper = PinterestScraper()
-        urls = scraper.scrape(pinterest_url, max_photos)
-        
-        if not urls:
-            return jsonify({
-                "error": "Aucune image trouvée",
-                "suggestion": "Essayez une autre URL ou vérifiez que la page contient des images"
-            }), 404
-        
-        # Insertion en base de données
-        cur = conn.cursor()
-        inserted = 0
-        duplicates = 0
-        errors = 0
-        
-        for url in urls:
-            # Validation finale de l'URL
-            if not url.startswith('https://i.pinimg.com/'):
-                errors += 1
-                continue
-            
-            try:
-                cur.execute(
-                    "INSERT INTO images (url, category, used) VALUES (%s, %s, FALSE) RETURNING id",
-                    (url, category)
-                )
-                result = cur.fetchone()
-                if result:
-                    inserted += 1
-                    logging.info(f"✅ Image ajoutée: {url[:50]}...")
-                conn.commit()
-                
-            except psycopg2.IntegrityError:
-                duplicates += 1
-                conn.rollback()
-            except Exception as e:
-                errors += 1
-                logging.error(f"❌ Erreur insertion: {e}")
-                conn.rollback()
-        
-        cur.close()
-        conn.close()
-        
-        # Invalider le cache
-        cache.clear()
-        
-        # Log final
-        logging.info(f"""
-        📊 RÉSULTAT IMPORT:
-        - Détectées: {len(urls)}
-        - Insérées: {inserted}
-        - Doublons: {duplicates}
-        - Erreurs: {errors}
-        """)
-        
-        return jsonify({
-            "success": True,
-            "detected": len(urls),
-            "inserted": inserted,
-            "duplicates": duplicates,
-            "errors": errors,
-            "category": category,
-            "message": f"✅ {inserted} photos importées avec succès !"
-        })
-        
-    except Exception as e:
-        logging.error(f"❌ Erreur import: {e}")
-        return jsonify({"error": f"Erreur serveur: {str(e)}"}), 500
+        await ctx.message.delete()
+    except Exception:
+        pass
 
+@bot.command(name="ticketadmin")
+@admin_required()
+async def cmd_ticketadmin(ctx):
+    gcfg = get_gcfg(ctx.guild.id)
+    view = AdminTicketView(gcfg, ctx.author.id)
+    embed = discord.Embed(title=_noel_title("Panneau Admin - Tickets"), color=0x95a5a6)
+    
+    # Affichage sommaire des tickets
+    entries = gcfg.get("openTickets", {})
+    embed.description = f"**Tickets ouverts:** {len(entries)}"
+    
+    await ctx.reply(embed=embed, view=view, ephemeral=False)
 
-# ===== ENDPOINT BONUS : Import par recherche =====
+@bot.command(name="ban")
+@commands.has_permissions(ban_members=True)
+async def cmd_ban(ctx, member: discord.Member, *, reason: str = "Aucune raison fournie"):
+    await ctx.reply(f"Ban de {member.mention} simulé.")
 
-@app.route("/api/import/search", methods=["POST"])
-@require_api_key
-@limiter.limit("5 per hour")
-def import_by_search():
-    """Import direct depuis une recherche Pinterest"""
+@bot.command(name="mute")
+@commands.has_permissions(moderate_members=True)
+async def cmd_mute(ctx, member: discord.Member, duration: str, *, reason: str = "Aucune raison fournie"):
+    secs = parse_duration(duration)
+    if secs is None:
+        return await ctx.reply("❌ Durée invalide. Utilisez: 10s, 5m, 1h, 1d")
+    await ctx.reply(f"Mute de {member.mention} pour {duration} ({secs}s) simulé.")
+
+# (Autres commandes de modération et de configuration se trouveraient ici)
+
+@bot.command(name="config")
+@admin_required()
+async def cmd_config(ctx):
+    await ctx.reply("Menu de configuration simulé.")
+
+# ==============================================================================
+# 🟢 Exécution du Bot
+# ==============================================================================
+
+if __name__ == '__main__':
+    # ⚠️ CHARGEMENT DU TOKEN: Utilisez une variable d'environnement pour la sécurité
     try:
-        data = request.get_json()
-        query = data.get('query', '')
-        category = data.get('category', 'uncategorized')
-        max_photos = min(100, data.get('max_photos', 50))
-        
-        if not query:
-            return jsonify({"error": "Requête de recherche manquante"}), 400
-        
-        # Construire l'URL de recherche Pinterest
-        search_url = f"https://www.pinterest.com/search/pins/?q={query.replace(' ', '%20')}"
-        
-        logging.info(f"🔍 Recherche Pinterest: {query}")
-        scraper = PinterestScraper()
-        urls = scraper.scrape(search_url, max_photos)
-        
-        if not urls:
-            return jsonify({
-                "error": "Aucune image trouvée pour cette recherche",
-                "query": query
-            }), 404
-        
-        # Insertion (même logique que import_photos)
-        conn = db_connect()
-        if not conn:
-            return jsonify({"error": "Erreur DB"}), 500
-        
-        cur = conn.cursor()
-        inserted = 0
-        duplicates = 0
-        
-        for url in urls:
-            try:
-                cur.execute(
-                    "INSERT INTO images (url, category, used) VALUES (%s, %s, FALSE)",
-                    (url, category)
-                )
-                inserted += 1
-                conn.commit()
-            except psycopg2.IntegrityError:
-                duplicates += 1
-                conn.rollback()
-        
-        cur.close()
-        conn.close()
-        cache.clear()
-        
-        return jsonify({
-            "success": True,
-            "query": query,
-            "detected": len(urls),
-            "inserted": inserted,
-            "duplicates": duplicates,
-            "category": category
-        })
-        
-    except Exception as e:
-        logging.error(f"❌ Erreur import search: {e}")
-        return jsonify({"error": str(e)}), 500
+        from dotenv import load_dotenv
+        load_dotenv()
+        TOKEN = os.getenv('DISCORD_TOKEN')
+    except ImportError:
+        # Si python-dotenv n'est pas installé ou si la ligne est commentée
+        TOKEN = "VOTRE_TOKEN_ICI" # Remplacer par votre token si dotenv n'est pas utilisé
+
+    if TOKEN and TOKEN != "VOTRE_TOKEN_ICI":
+        print("Démarrage du bot...")
+        try:
+            bot.run(TOKEN)
+        except discord.errors.LoginFailure:
+            print("\n\nERREUR: Le token du bot est invalide. Veuillez le vérifier.\n")
+        except Exception as e:
+            print(f"\n\nUne erreur inattendue s'est produite lors du démarrage: {e}\n")
+    else:
+        print("\n\nERREUR: Le token du bot n'a pas été chargé. Vérifiez votre fichier .env ou la variable TOKEN.\n")
