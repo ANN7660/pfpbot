@@ -4,6 +4,8 @@ from discord import app_commands
 import aiohttp
 import os
 from typing import Optional
+from aiohttp import web
+import asyncio
 
 # ==============================================================================
 # ⚙️ CONFIGURATION
@@ -23,6 +25,40 @@ intents.guilds = True
 
 # Désactiver la commande help par défaut
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+
+# ==============================================================================
+# 🌐 SERVEUR WEB POUR RENDER (Keep-Alive)
+# ==============================================================================
+
+async def health_check(request):
+    """Endpoint de santé pour Render."""
+    return web.Response(text="✅ Bot Discord PDP en ligne !", status=200)
+
+async def stats_endpoint(request):
+    """Endpoint pour voir les stats du bot."""
+    guilds = len(bot.guilds)
+    users = sum(g.member_count for g in bot.guilds)
+    return web.json_response({
+        "status": "online",
+        "bot": str(bot.user),
+        "guilds": guilds,
+        "users": users,
+        "latency": round(bot.latency * 1000, 2)
+    })
+
+async def start_web_server():
+    """Démarre le serveur web pour Render."""
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/stats', stats_endpoint)
+    
+    port = int(os.getenv('PORT', 10000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"🌐 Serveur web démarré sur le port {port}")
 
 # ==============================================================================
 # 📊 FONCTIONS UTILITAIRES
@@ -69,12 +105,10 @@ async def on_ready():
     print(f"✅ Bot connecté : {bot.user.name} (ID: {bot.user.id})")
     print(f"📊 Connecté sur {len(bot.guilds)} serveur(s)")
     
-    # Synchroniser les slash commands
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ {len(synced)} commandes slash synchronisées")
-    except Exception as e:
-        print(f"❌ Erreur sync: {e}")
+    # Démarrer le serveur web pour Render
+    asyncio.create_task(start_web_server())
+    
+    print(f"✅ Bot prêt ! Commandes : !help, !stock, !pdp")
 
 # ==============================================================================
 # 📜 COMMANDES
@@ -251,110 +285,6 @@ async def cmd_pdp(ctx, category: str = None, count: int = 1):
         except Exception as e:
             print(f"Erreur envoi photo {i}: {e}")
             await ctx.send(f"❌ Erreur lors de l'envoi de la photo {i}")
-
-# ==============================================================================
-# 🚀 SLASH COMMANDS (Commandes modernes Discord)
-# ==============================================================================
-
-@bot.tree.command(name="help", description="Affiche le menu d'aide")
-async def slash_help(interaction: discord.Interaction):
-    """Slash command pour l'aide."""
-    embed = discord.Embed(
-        title="🎨 Bot PDP - Menu d'aide",
-        description="Voici toutes les commandes disponibles :",
-        color=discord.Color.blue()
-    )
-    
-    embed.add_field(
-        name="/pdp <catégorie> <nombre>",
-        value="Envoie des photos de profil aléatoires",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="/stock",
-        value="Affiche le nombre de photos disponibles par catégorie",
-        inline=False
-    )
-    
-    embed.set_footer(text="Bot PDP • Mode Noël 🎄")
-    
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="stock", description="Affiche le stock de photos par catégorie")
-async def slash_stock(interaction: discord.Interaction):
-    """Slash command pour le stock."""
-    await interaction.response.defer()
-    
-    stats = await get_api_stats()
-    
-    if not stats:
-        await interaction.followup.send("❌ Impossible de récupérer les statistiques.")
-        return
-    
-    embed = discord.Embed(
-        title="📊 Stock de Photos",
-        description=f"**Total : {stats.get('total_photos', 0):,} photos**",
-        color=discord.Color.green()
-    )
-    
-    category_emojis = {
-        "boy": "👦", "girl": "👧", "anime": "🎌",
-        "aesthetic": "✨", "cute": "🥰", "banner": "🎨", "match": "💕"
-    }
-    
-    for cat_data in stats.get("categories", []):
-        category = cat_data.get("category", "inconnu")
-        count = cat_data.get("count", 0)
-        emoji = category_emojis.get(category, "📷")
-        embed.add_field(name=f"{emoji} {category.capitalize()}", value=f"**{count:,}** photos", inline=True)
-    
-    await interaction.followup.send(embed=embed)
-
-@bot.tree.command(name="pdp", description="Récupère des photos de profil")
-@app_commands.describe(
-    category="Catégorie de photos (boy, girl, anime, etc.)",
-    count="Nombre de photos (1-10)"
-)
-@app_commands.choices(category=[
-    app_commands.Choice(name="👦 Boy", value="boy"),
-    app_commands.Choice(name="👧 Girl", value="girl"),
-    app_commands.Choice(name="🎌 Anime", value="anime"),
-    app_commands.Choice(name="✨ Aesthetic", value="aesthetic"),
-    app_commands.Choice(name="🥰 Cute", value="cute"),
-    app_commands.Choice(name="🎨 Banner", value="banner"),
-    app_commands.Choice(name="💕 Match", value="match"),
-])
-async def slash_pdp(interaction: discord.Interaction, category: str, count: int = 1):
-    """Slash command pour récupérer des photos."""
-    if count < 1 or count > 10:
-        await interaction.response.send_message("❌ Le nombre doit être entre 1 et 10.", ephemeral=True)
-        return
-    
-    await interaction.response.defer()
-    
-    photos = await get_random_photos(category, count)
-    
-    if not photos:
-        await interaction.followup.send(f"❌ Aucune photo trouvée pour `{category}`.")
-        return
-    
-    # Premier message avec info
-    embed = discord.Embed(
-        title=f"📷 {len(photos)} photo(s) - {category.capitalize()}",
-        description="Chargement des images...",
-        color=discord.Color.purple()
-    )
-    await interaction.followup.send(embed=embed)
-    
-    # Envoi des photos
-    for photo in photos:
-        try:
-            embed_photo = discord.Embed(color=discord.Color.random())
-            embed_photo.set_image(url=photo.get("url"))
-            await interaction.channel.send(embed=embed_photo)
-        except Exception as e:
-            print(f"Erreur: {e}")
 
 # ==============================================================================
 # 🟢 DÉMARRAGE DU BOT
