@@ -21,7 +21,8 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+# Désactiver la commande help par défaut
+bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # ==============================================================================
 # 📊 FONCTIONS UTILITAIRES
