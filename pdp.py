@@ -1,5 +1,3 @@
-# pdp.py — Version finale complète
-
 import os
 import asyncio
 import logging
@@ -59,21 +57,44 @@ def db_init():
 
     cur = conn.cursor()
 
-    # Ajoute colonnes si manquantes
+    # Crée la table si elle n'existe pas
     cur.execute("""
-        ALTER TABLE images
-        ADD COLUMN IF NOT EXISTS used BOOLEAN DEFAULT FALSE;
+        CREATE TABLE IF NOT EXISTS images (
+            id SERIAL PRIMARY KEY,
+            url TEXT UNIQUE NOT NULL,
+            category TEXT,
+            used BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
     """)
 
+    # Ajoute colonnes si manquantes (pour migration)
+    try:
+        cur.execute("""
+            ALTER TABLE images
+            ADD COLUMN IF NOT EXISTS used BOOLEAN DEFAULT FALSE;
+        """)
+    except Exception as e:
+        logging.warning(f"Column 'used' might already exist: {e}")
+
+    try:
+        cur.execute("""
+            ALTER TABLE images
+            ADD COLUMN IF NOT EXISTS category TEXT;
+        """)
+    except Exception as e:
+        logging.warning(f"Column 'category' might already exist: {e}")
+
+    # Crée un index pour améliorer les performances
     cur.execute("""
-        ALTER TABLE images
-        ADD COLUMN IF NOT EXISTS category TEXT;
+        CREATE INDEX IF NOT EXISTS idx_category_used 
+        ON images(category, used) WHERE used = FALSE;
     """)
 
     conn.commit()
     cur.close()
     conn.close()
-    logging.info("Structure DB vérifiée.")
+    logging.info("Structure DB vérifiée et créée si nécessaire.")
 
 # ----------------------
 # DISCORD BOT
@@ -88,6 +109,26 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 @bot.event
 async def on_ready():
     logging.info(f"Bot connecté : {bot.user}")
+    
+    # Vérifier la DB au démarrage
+    conn = db_connect()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) as total FROM images")
+            result = cur.fetchone()
+            total = result['total'] if result else 0
+            cur.close()
+            conn.close()
+            logging.info(f"✅ DB OK - {total} images en stock")
+        except Exception as e:
+            logging.error(f"⚠️ Erreur DB au démarrage: {e}")
+            logging.info("Tentative de réinitialisation...")
+            conn.close()
+            db_init()
+    else:
+        logging.error("❌ Impossible de se connecter à la DB")
+    
     await bot.change_presence(activity=discord.Game(name="!help pour les commandes"))
 
 # ----------------------
@@ -227,19 +268,49 @@ async def pdp(ctx):
     
     conn = db_connect()
     if not conn:
-        return await status_msg.edit(content="❌ Erreur de connexion DB.")
+        return await status_msg.edit(
+            embed=discord.Embed(
+                title="❌ Erreur de connexion",
+                description="Impossible de se connecter à la base de données.",
+                color=0xe74c3c
+            )
+        )
     
     cur = conn.cursor()
-    cur.execute(
-        "SELECT url FROM images WHERE category=%s AND used=FALSE ORDER BY RANDOM() LIMIT %s",
-        (category, count)
-    )
-    rows = cur.fetchall()
-    urls = [r["url"] for r in rows]
     
-    if urls:
-        cur.execute("UPDATE images SET used=TRUE WHERE url = ANY(%s)", (urls,))
-        conn.commit()
+    try:
+        cur.execute(
+            "SELECT url FROM images WHERE category=%s AND used=FALSE ORDER BY RANDOM() LIMIT %s",
+            (category, count)
+        )
+        rows = cur.fetchall()
+        urls = [r["url"] for r in rows]
+        
+        if urls:
+            cur.execute("UPDATE images SET used=TRUE WHERE url = ANY(%s)", (urls,))
+            conn.commit()
+    except psycopg2.errors.UndefinedColumn as e:
+        logging.error(f"Erreur de colonne DB: {e}")
+        cur.close()
+        conn.close()
+        return await status_msg.edit(
+            embed=discord.Embed(
+                title="❌ Erreur de structure DB",
+                description="La table n'est pas correctement initialisée. Redémarrez le bot.",
+                color=0xe74c3c
+            )
+        )
+    except Exception as e:
+        logging.error(f"Erreur lors de la récupération: {e}")
+        cur.close()
+        conn.close()
+        return await status_msg.edit(
+            embed=discord.Embed(
+                title="❌ Erreur",
+                description=f"Une erreur est survenue: {str(e)}",
+                color=0xe74c3c
+            )
+        )
     
     cur.close()
     conn.close()
@@ -266,7 +337,7 @@ async def pdp(ctx):
         await ctx.send(f"`[{i}/{len(urls)}]` {url}")
 
 # ----------------------
-# COMMANDE !URL (VERSION MANUELLE)
+# COMMANDE !URL (VERSION MANUELLE + WEBHOOK)
 # ----------------------
 @bot.command(name="url")
 async def url_cmd(ctx):
@@ -398,6 +469,7 @@ async def url_cmd(ctx):
     cur = conn.cursor()
     inserted = 0
     duplicates = 0
+    inserted_urls = []
     
     for img_url in selected_urls:
         try:
@@ -407,6 +479,8 @@ async def url_cmd(ctx):
             )
             if cur.rowcount > 0:
                 inserted += 1
+                inserted_urls.append(img_url)
+            conn.commit()
         except psycopg2.IntegrityError:
             duplicates += 1
             conn.rollback()
@@ -414,9 +488,48 @@ async def url_cmd(ctx):
             logging.error(f"Erreur insertion: {e}")
             conn.rollback()
     
-    conn.commit()
     cur.close()
     conn.close()
+    
+    # ---- ENVOI VIA WEBHOOK ----
+    if inserted > 0 and WEBHOOK_URL:
+        webhook_status = await ctx.send("📤 **Envoi des images vers le serveur privé...**")
+        
+        try:
+            # Envoyer par batch de 10 images
+            for i in range(0, len(inserted_urls), 10):
+                batch = inserted_urls[i:i+10]
+                
+                webhook_embed = {
+                    "embeds": [{
+                        "title": f"📥 Nouvelles images - {category.upper()}",
+                        "description": f"**Batch {i//10 + 1}** • {len(batch)} images",
+                        "color": 3447003,
+                        "fields": [
+                            {
+                                "name": f"Image {j+1}",
+                                "value": f"[Voir l'image]({url})",
+                                "inline": False
+                            } for j, url in enumerate(batch)
+                        ],
+                        "footer": {
+                            "text": f"Catégorie: {category} • Total inséré: {inserted}"
+                        }
+                    }]
+                }
+                
+                response = requests.post(WEBHOOK_URL, json=webhook_embed, timeout=10)
+                
+                if response.status_code == 204:
+                    await asyncio.sleep(1)  # Éviter le rate limit
+                else:
+                    logging.error(f"Webhook error: {response.status_code}")
+            
+            await webhook_status.edit(content="✅ **Images envoyées au serveur privé !**")
+            
+        except Exception as e:
+            logging.error(f"Erreur webhook: {e}")
+            await webhook_status.edit(content="⚠️ **Erreur lors de l'envoi au serveur privé**")
     
     # ---- RÉSULTAT FINAL ----
     final_embed = discord.Embed(
@@ -428,6 +541,9 @@ async def url_cmd(ctx):
     final_embed.add_field(name="✅ Insérées", value=str(inserted), inline=True)
     final_embed.add_field(name="⚠️ Doublons", value=str(duplicates), inline=True)
     final_embed.add_field(name="📁 Catégorie", value=category, inline=False)
+    
+    if inserted > 0 and WEBHOOK_URL:
+        final_embed.add_field(name="📤 Webhook", value="✅ Envoyées au serveur privé", inline=False)
     
     await status_msg.edit(content=None, embed=final_embed)
 
