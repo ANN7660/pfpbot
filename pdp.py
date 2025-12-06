@@ -5,6 +5,7 @@ import os
 import asyncio
 import random
 from aiohttp import web
+import re
 
 # ==============================================================================
 # ⚙️ CONFIGURATION DOUBLE WEBHOOK
@@ -15,12 +16,10 @@ UPLOAD_WEBHOOK_URL = "https://discord.com/api/webhooks/1444170798222020690/7wp6e
 UPLOAD_CHANNEL_ID = 1425082379768303649  # ID du salon privé
 
 # WEBHOOK 2 : Serveur public pour DISTRIBUTION (bot envoie ici)
-PUBLIC_WEBHOOK_URL = "https://discord.com/api/webhooks/1446667319148417138/NJMcPKmNNYek9jgVwZdawpq8WbcnNQjt1tjiD17YX_KuFOG71jIX9A6P542qEKlEn3gf"  # ⚠️ CHANGE MOI
-PUBLIC_CHANNEL_ID = 1446667244036689963 # ⚠️ ID du salon public
+PUBLIC_WEBHOOK_URL = "https://discord.com/api/webhooks/1446667319148417138/NJMcPKmNNYek9jgVwZdawpq8WbcnNQjt1tjiD17YX_KuFOG71jIX9A6P542qEKlEn3gf"
+PUBLIC_CHANNEL_ID = 1446667244036689963
 
 # Choix : Surveiller quel webhook ?
-# "upload" = Lit depuis le webhook d'upload (serveur privé)
-# "both" = Lit depuis les deux (plus d'images disponibles)
 MONITOR_MODE = "upload"  # ou "both"
 
 # ==============================================================================
@@ -84,29 +83,75 @@ async def start_web_server():
     print(f"🌐 Serveur web démarré sur le port {port}")
 
 # ==============================================================================
-# 📡 GESTION DOUBLE WEBHOOK
+# 📡 GESTION DOUBLE WEBHOOK - VERSION CORRIGÉE
 # ==============================================================================
 
+def detect_category(filename: str, content: str) -> str:
+    """
+    Détecte la catégorie depuis le nom ou contenu.
+    VERSION AMÉLIORÉE avec patterns flexibles et catégorie par défaut.
+    """
+    text = (filename + " " + content).lower()
+    
+    # Patterns de détection plus flexibles
+    patterns = {
+        "boy": [r'\bboy\b', r'\bgarcon\b', r'\bboys\b', r'\bmale\b', r'\bman\b', r'\bhomme\b'],
+        "girl": [r'\bgirl\b', r'\bfille\b', r'\bgirls\b', r'\bfemale\b', r'\bwoman\b', r'\bfemme\b'],
+        "anime": [r'\banime\b', r'\bmanga\b', r'\botaku\b', r'\banimé\b'],
+        "aesthetic": [r'\baesthetic\b', r'\baesthetics\b', r'\besthetique\b', r'\bvibe\b'],
+        "cute": [r'\bcute\b', r'\bkawaii\b', r'\bmignon\b', r'\badorable\b'],
+        "banner": [r'\bbanner\b', r'\bheader\b', r'\bcover\b', r'\bbanniere\b'],
+        "match": [r'\bmatch\b', r'\bmatching\b', r'\bcouple\b', r'\bpair\b']
+    }
+    
+    # Cherche dans les patterns
+    for category, pattern_list in patterns.items():
+        for pattern in pattern_list:
+            if re.search(pattern, text):
+                print(f"   ✓ Catégorie détectée: {category} (pattern: {pattern})")
+                return category
+    
+    # NOUVEAU : Si aucune catégorie détectée, assigne à "aesthetic" par défaut
+    print(f"   ⚠️ Aucune catégorie détectée pour: {filename}, assigné à 'aesthetic'")
+    return "aesthetic"  # Catégorie par défaut au lieu de None
+
 async def load_images_from_webhook(webhook_url: str, source_name: str):
-    """Charge les images depuis un webhook spécifique."""
+    """Charge les images depuis un webhook spécifique - VERSION CORRIGÉE."""
     try:
-        parts = webhook_url.split('/')
-        webhook_id = parts[5]
-        webhook_token = parts[6]
+        # Extraction sécurisée des IDs
+        match = re.search(r'/webhooks/(\d+)/([A-Za-z0-9_-]+)', webhook_url)
+        if not match:
+            print(f"❌ URL webhook invalide pour {source_name}")
+            return 0
+        
+        webhook_id = match.group(1)
+        webhook_token = match.group(2)
+        
+        print(f"📡 Connexion au webhook {source_name} (ID: {webhook_id[:10]}...)")
         
         async with aiohttp.ClientSession() as session:
             api_url = f"https://discord.com/api/v10/webhooks/{webhook_id}/{webhook_token}/messages"
             
+            # Charge PLUS de messages (jusqu'à 100)
             async with session.get(api_url, params={'limit': 100}) as response:
                 if response.status == 200:
                     messages = await response.json()
                     loaded_count = 0
+                    
+                    print(f"   📥 {len(messages)} messages trouvés")
                     
                     for msg in messages:
                         if msg.get('attachments'):
                             for attachment in msg['attachments']:
                                 url = attachment.get('url')
                                 filename = attachment.get('filename', '')
+                                content_type = attachment.get('content_type', '')
+                                
+                                # Vérifie que c'est une image
+                                if 'image' not in content_type:
+                                    continue
+                                
+                                print(f"   🖼️ Fichier trouvé: {filename}")
                                 
                                 category = detect_category(filename, msg.get('content', ''))
                                 
@@ -120,62 +165,59 @@ async def load_images_from_webhook(webhook_url: str, source_name: str):
                                             'source': source_name
                                         })
                                         loaded_count += 1
+                                        print(f"   ✅ Ajouté à {category}")
                     
                     print(f"✅ {loaded_count} images chargées depuis {source_name}")
                     return loaded_count
                 else:
+                    error_text = await response.text()
                     print(f"⚠️ Erreur webhook {source_name}: {response.status}")
+                    print(f"   Détails: {error_text[:200]}")
                     return 0
                     
     except Exception as e:
         print(f"❌ Erreur load {source_name}: {e}")
+        import traceback
+        traceback.print_exc()
         return 0
-
-def detect_category(filename: str, content: str) -> str:
-    """Détecte la catégorie depuis le nom ou contenu."""
-    text = (filename + " " + content).lower()
-    categories = ["boy", "girl", "anime", "aesthetic", "cute", "banner", "match"]
-    for cat in categories:
-        if cat in text:
-            return cat
-    return None
 
 async def load_all_images():
     """Charge les images depuis les webhooks configurés."""
+    print("\n" + "="*60)
+    print("🔄 CHARGEMENT DES IMAGES")
+    print("="*60)
+    
     total = 0
     
     # Webhook d'upload (obligatoire)
-    print(f"📡 Chargement depuis webhook UPLOAD...")
-    total += await load_images_from_webhook(UPLOAD_WEBHOOK_URL, "upload")
+    print(f"📡 Source 1: Webhook UPLOAD")
+    count1 = await load_images_from_webhook(UPLOAD_WEBHOOK_URL, "upload")
+    total += count1
     
     # Webhook public (optionnel si MONITOR_MODE = "both")
-    if MONITOR_MODE == "both" and PUBLIC_WEBHOOK_URL != "https://discord.com/api/webhooks/TON_WEBHOOK_PUBLIC_ICI":
-        print(f"📡 Chargement depuis webhook PUBLIC...")
-        total += await load_images_from_webhook(PUBLIC_WEBHOOK_URL, "public")
+    if MONITOR_MODE == "both" and "TON_WEBHOOK_PUBLIC_ICI" not in PUBLIC_WEBHOOK_URL:
+        print(f"\n📡 Source 2: Webhook PUBLIC")
+        count2 = await load_images_from_webhook(PUBLIC_WEBHOOK_URL, "public")
+        total += count2
     
     stats["cache_refreshes"] += 1
     
-    print(f"✅ Total : {total} images chargées")
+    print("\n" + "="*60)
+    print(f"✅ TOTAL : {total} images chargées")
+    print("="*60)
+    
     for cat, imgs in image_cache.items():
         if imgs:
-            print(f"   - {cat}: {len(imgs)} images")
-
-async def send_to_public_webhook(embed_data: dict):
-    """Envoie un embed au webhook public."""
-    if PUBLIC_WEBHOOK_URL == "https://discord.com/api/webhooks/TON_WEBHOOK_PUBLIC_ICI":
-        return False
+            print(f"   📂 {cat.upper()}: {len(imgs)} images")
     
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                PUBLIC_WEBHOOK_URL,
-                json={"embeds": [embed_data]},
-                headers={'Content-Type': 'application/json'}
-            ) as response:
-                return response.status in [200, 204]
-    except Exception as e:
-        print(f"❌ Erreur envoi webhook public: {e}")
-        return False
+    if total == 0:
+        print("\n⚠️ ATTENTION : Aucune image chargée !")
+        print("   Vérifiez que :")
+        print("   1. Le webhook contient des messages avec des images")
+        print("   2. Les noms de fichiers contiennent les catégories (boy, girl, etc.)")
+        print("   3. Les URLs des webhooks sont corrects")
+    
+    print("="*60 + "\n")
 
 # ==============================================================================
 # 🔄 TÂCHE AUTOMATIQUE - Refresh cache
@@ -198,8 +240,10 @@ async def auto_refresh_cache():
 
 @bot.event
 async def on_ready():
-    print(f"✅ Bot connecté : {bot.user.name} (ID: {bot.user.id})")
-    print(f"📊 Connecté sur {len(bot.guilds)} serveur(s)")
+    print("\n" + "="*60)
+    print(f"✅ BOT CONNECTÉ : {bot.user.name} (ID: {bot.user.id})")
+    print(f"📊 Serveurs : {len(bot.guilds)}")
+    print("="*60 + "\n")
     
     asyncio.create_task(start_web_server())
     
@@ -216,7 +260,7 @@ async def on_ready():
         )
     )
     
-    print(f"✅ Bot prêt !")
+    print(f"✅ Bot prêt à répondre aux commandes !\n")
 
 @bot.event
 async def on_message(message):
@@ -226,6 +270,7 @@ async def on_message(message):
     
     # Surveille le webhook d'upload
     if message.channel.id == UPLOAD_CHANNEL_ID and message.attachments:
+        print(f"📥 Nouveau message détecté sur webhook UPLOAD")
         for attachment in message.attachments:
             if attachment.content_type and 'image' in attachment.content_type:
                 url = attachment.url
@@ -241,10 +286,11 @@ async def on_message(message):
                             'id': attachment.id,
                             'source': 'upload'
                         })
-                        print(f"➕ Nouvelle image : {category} ({filename})")
+                        print(f"➕ Image ajoutée en temps réel : {category} ({filename})")
     
     # Surveille le webhook public si activé
     if MONITOR_MODE == "both" and message.channel.id == PUBLIC_CHANNEL_ID and message.attachments:
+        print(f"📥 Nouveau message détecté sur webhook PUBLIC")
         for attachment in message.attachments:
             if attachment.content_type and 'image' in attachment.content_type:
                 url = attachment.url
@@ -259,6 +305,7 @@ async def on_message(message):
                             'id': attachment.id,
                             'source': 'public'
                         })
+                        print(f"➕ Image ajoutée en temps réel (public) : {category}")
     
     await bot.process_commands(message)
 
@@ -268,6 +315,8 @@ async def on_command_error(ctx, error):
         await ctx.send("❌ Commande inconnue. Utilisez `!help`")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(f"❌ Argument manquant. Utilisez `!help`")
+    else:
+        print(f"Erreur commande: {error}")
 
 # ==============================================================================
 # 📜 COMMANDES
@@ -307,8 +356,77 @@ async def cmd_help(ctx):
         inline=False
     )
     
+    embed.add_field(
+        name="🔍 !debug",
+        value="Affiche les derniers messages du webhook (admin)",
+        inline=False
+    )
+    
     embed.set_footer(text="Double Webhook System 🎄")
     embed.timestamp = discord.utils.utcnow()
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="debug", aliases=["test"])
+@commands.has_permissions(administrator=True)
+async def cmd_debug(ctx):
+    """Commande de debug pour voir ce qui se passe."""
+    embed = discord.Embed(
+        title="🔍 Debug Info",
+        color=discord.Color.orange()
+    )
+    
+    # Info sur le cache
+    total = sum(len(imgs) for imgs in image_cache.values())
+    embed.add_field(name="📦 Images en cache", value=str(total), inline=False)
+    
+    for cat, imgs in image_cache.items():
+        if imgs:
+            # Affiche les 3 premiers fichiers
+            sample = imgs[:3]
+            filenames = "\n".join([f"- {img['filename']}" for img in sample])
+            embed.add_field(
+                name=f"📂 {cat} ({len(imgs)})",
+                value=filenames or "Aucun",
+                inline=False
+            )
+    
+    # Tente de charger 1 message
+    try:
+        match = re.search(r'/webhooks/(\d+)/([A-Za-z0-9_-]+)', UPLOAD_WEBHOOK_URL)
+        if match:
+            webhook_id = match.group(1)
+            webhook_token = match.group(2)
+            
+            async with aiohttp.ClientSession() as session:
+                api_url = f"https://discord.com/api/v10/webhooks/{webhook_id}/{webhook_token}/messages"
+                async with session.get(api_url, params={'limit': 5}) as response:
+                    if response.status == 200:
+                        messages = await response.json()
+                        embed.add_field(
+                            name="✅ Test webhook",
+                            value=f"{len(messages)} messages trouvés",
+                            inline=False
+                        )
+                        
+                        # Affiche le premier message
+                        if messages:
+                            msg = messages[0]
+                            attachments = msg.get('attachments', [])
+                            embed.add_field(
+                                name="📝 Premier message",
+                                value=f"Attachments: {len(attachments)}\n"
+                                      f"Content: {msg.get('content', 'Vide')[:50]}",
+                                inline=False
+                            )
+                    else:
+                        embed.add_field(
+                            name="❌ Test webhook",
+                            value=f"Erreur {response.status}",
+                            inline=False
+                        )
+    except Exception as e:
+        embed.add_field(name="❌ Erreur test", value=str(e)[:100], inline=False)
     
     await ctx.send(embed=embed)
 
@@ -320,7 +438,7 @@ async def cmd_stock(ctx):
         title="📊 Stock d'Images",
         description=f"**Total : {total} images en cache**\n"
                    f"*Mode : {MONITOR_MODE}*",
-        color=discord.Color.green()
+        color=discord.Color.green() if total > 0 else discord.Color.red()
     )
     
     category_emojis = {
@@ -336,7 +454,6 @@ async def cmd_stock(ctx):
     for category, emoji in category_emojis.items():
         count = len(image_cache[category])
         if count > 0:
-            # Compte par source
             upload_count = sum(1 for img in image_cache[category] if img.get('source') == 'upload')
             public_count = sum(1 for img in image_cache[category] if img.get('source') == 'public')
             
@@ -349,6 +466,13 @@ async def cmd_stock(ctx):
                 value=value,
                 inline=True
             )
+    
+    if total == 0:
+        embed.add_field(
+            name="⚠️ Cache vide",
+            value="Utilisez `!refresh` ou `!debug` pour diagnostiquer",
+            inline=False
+        )
     
     embed.set_footer(text=f"Refresh: {stats['cache_refreshes']} fois • Envoyé: {stats['total_sent']} images")
     
@@ -410,7 +534,7 @@ async def cmd_pdp(ctx, category: str = None, count: int = 1):
     
     available = len(image_cache[category])
     if available == 0:
-        await ctx.send(f"❌ Aucune image en cache pour `{category}`.")
+        await ctx.send(f"❌ Aucune image en cache pour `{category}`. Utilisez `!refresh` pour recharger.")
         return
     
     count = min(count, available)
@@ -442,24 +566,20 @@ async def cmd_pdp(ctx, category: str = None, count: int = 1):
     
     await ctx.send(embed=embed_intro)
     
-    # Envoie les images (JUSTE L'URL, SANS EMBED)
+    # Envoie les images
     for i, img in enumerate(selected_images, 1):
         try:
-            # Envoie UNIQUEMENT l'URL de l'image (Discord va l'afficher automatiquement)
             await ctx.send(img['url'])
-            
             stats["total_sent"] += 1
             
-            # Délai pour éviter le rate limit Discord (5 msg/5sec)
             if i < count:
-                await asyncio.sleep(1.2)  # 1.2 sec entre chaque = safe
+                await asyncio.sleep(1.2)
                 
         except discord.errors.HTTPException as e:
-            if e.status == 429:  # Rate limited
-                print(f"⚠️ Rate limit atteint, pause de 5 secondes...")
-                await ctx.send(f"⚠️ Trop rapide ! Pause de 5 secondes... ({i}/{count})")
+            if e.status == 429:
+                print(f"⚠️ Rate limit atteint, pause...")
+                await ctx.send(f"⚠️ Trop rapide ! Pause... ({i}/{count})")
                 await asyncio.sleep(5)
-                # Réessaye
                 await ctx.send(img['url'])
             else:
                 print(f"Erreur HTTP envoi photo {i}: {e}")
@@ -488,13 +608,18 @@ if __name__ == "__main__":
         print("❌ ERREUR : DISCORD_TOKEN manquant !")
         exit(1)
     
-    print("🚀 Démarrage du bot (Dual Webhook System)...")
+    print("="*60)
+    print("🚀 DÉMARRAGE DU BOT (DUAL WEBHOOK SYSTEM)")
+    print("="*60)
     print(f"📡 Webhook UPLOAD surveillé : {UPLOAD_CHANNEL_ID}")
     if MONITOR_MODE == "both":
         print(f"📡 Webhook PUBLIC surveillé : {PUBLIC_CHANNEL_ID}")
+    print("="*60 + "\n")
     
     try:
         bot.run(TOKEN)
     except Exception as e:
         print(f"❌ Erreur : {e}")
+        import traceback
+        traceback.print_exc()
         exit(1)
