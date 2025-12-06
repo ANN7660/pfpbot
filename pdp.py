@@ -12,8 +12,9 @@ import re
 # ==============================================================================
 
 # WEBHOOK 1 : Serveur privé pour UPLOAD (scraper Pinterest)
-UPLOAD_WEBHOOK_URL = "https://discord.com/api/webhooks/1444170798222020690/7wp6evUDdI2rf2Y7Rgk3rPGcEAS9w86-Oynf2aINMgjoEMpSIqri-MQIgBYAhfoVmC-I"
-UPLOAD_CHANNEL_ID = 1425082379768303649  # ID du salon privé
+# ⚠️ REMPLACEZ PAR VOTRE NOUVEAU WEBHOOK ⚠️
+UPLOAD_WEBHOOK_URL = "https://canary.discord.com/api/webhooks/1446673453439651930/rAbJgZyJAky29bd9j02Gmt9P78EVwklJ_Os6UpYlfHTix495080jQuix1KPi0JKevRRd"
+UPLOAD_CHANNEL_ID = 1446673425241477235 # ⚠️ REMPLACEZ PAR L'ID DU SALON (clic droit > Copier l'ID)
 
 # WEBHOOK 2 : Serveur public pour DISTRIBUTION (bot envoie ici)
 PUBLIC_WEBHOOK_URL = "https://discord.com/api/webhooks/1446667319148417138/NJMcPKmNNYek9jgVwZdawpq8WbcnNQjt1tjiD17YX_KuFOG71jIX9A6P542qEKlEn3gf"
